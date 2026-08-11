@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+
+# Database
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Node
+node_modules/
+frontend/dist/
+
+# Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,256 @@
+import { useEffect, useState } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
+import { api, type DashboardData, type RecentTrade, type BiasHighlight } from '@/lib/api'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Separator } from '@/components/ui/separator'
+import { TradeTargets } from '@/components/TradeTargets'
+import { gradeBadgeVariant, formatDate } from '@/lib/gradeUtils'
+import { cn } from '@/lib/utils'
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function pct(n: number | null | undefined): string {
+  if (n == null) return '—'
+  return `${n >= 0 ? '+' : ''}${Math.round(n * 100)}%`
+}
+
+// ── Stat card ─────────────────────────────────────────────────────────────────
+function StatCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+  return (
+    <Card className="bg-card">
+      <CardContent className="pt-4 pb-4">
+        <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">{label}</p>
+        <p className={cn('text-2xl font-semibold font-mono', color ?? '')}>{value}</p>
+        {sub && <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>}
+      </CardContent>
+    </Card>
+  )
+}
+
+// ── Bias highlight card ───────────────────────────────────────────────────────
+function BiasCard({ highlight }: { highlight: BiasHighlight }) {
+  const isNegative = highlight.avg_differential < -0.03
+  const isPositive = highlight.avg_differential > 0.03
+  const border = isNegative ? 'border-red-800' : isPositive ? 'border-green-800' : 'border-border'
+  const bg = isNegative ? 'bg-red-950/20' : isPositive ? 'bg-green-950/20' : 'bg-card'
+  const diffColor = isNegative ? 'text-red-400' : isPositive ? 'text-green-400' : 'text-yellow-400'
+
+  const description = isNegative
+    ? `You give away ~${Math.abs(Math.round(highlight.avg_differential * 100))}% of value — ${highlight.wins}W / ${highlight.losses}L in ${highlight.count} trades`
+    : `You capture ~${Math.abs(Math.round(highlight.avg_differential * 100))}% extra value — ${highlight.wins}W / ${highlight.losses}L in ${highlight.count} trades`
+
+  return (
+    <div className={cn('rounded-xl border p-3 space-y-1', border, bg)}>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-medium">{highlight.label}</p>
+        <span className={cn('text-sm font-mono font-bold', diffColor)}>
+          {pct(highlight.avg_differential)}
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">{description}</p>
+    </div>
+  )
+}
+
+// ── Recent trade row ──────────────────────────────────────────────────────────
+function RecentTradeRow({ trade }: { trade: RecentTrade }) {
+  const navigate = useNavigate()
+  const diffColor = trade.decision_differential > 0
+    ? 'text-green-400'
+    : trade.decision_differential < 0
+    ? 'text-red-400'
+    : 'text-muted-foreground'
+
+  return (
+    <button
+      onClick={() => navigate(`/trades/${trade.trade_id}`)}
+      className="w-full text-left flex items-center gap-3 py-2.5 px-3 rounded-lg hover:bg-muted/30 transition-colors cursor-pointer"
+    >
+      {/* Grades */}
+      <div className="flex items-center gap-1 shrink-0">
+        {trade.decision_grade ? (
+          <span className={cn('text-xs font-mono font-semibold px-1.5 py-0.5 rounded border', gradeBadgeVariant(trade.decision_grade))}>
+            {trade.decision_grade}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground w-8">—</span>
+        )}
+      </div>
+
+      {/* Assets */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-xs text-green-400 font-medium truncate">
+            ↓ {trade.assets_received.slice(0, 2).join(', ') || '—'}
+            {trade.assets_received.length > 2 && ` +${trade.assets_received.length - 2}`}
+          </span>
+          <span className="text-xs text-muted-foreground">·</span>
+          <span className="text-xs text-red-400 truncate">
+            ↑ {trade.assets_given.slice(0, 2).join(', ') || '—'}
+            {trade.assets_given.length > 2 && ` +${trade.assets_given.length - 2}`}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 mt-0.5">
+          <span className="text-xs text-muted-foreground">{trade.league_name}</span>
+          <span className="text-xs text-muted-foreground">·</span>
+          <span className="text-xs text-muted-foreground">{formatDate(trade.executed_at)}</span>
+        </div>
+      </div>
+
+      {/* Differential */}
+      <span className={cn('text-xs font-mono shrink-0', diffColor)}>
+        {trade.decision_differential > 0 ? '+' : ''}{trade.decision_differential.toLocaleString()}
+      </span>
+    </button>
+  )
+}
+
+// ── Main dashboard ────────────────────────────────────────────────────────────
+export default function MyDashboard() {
+  const [data, setData] = useState<DashboardData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    api.getDashboard()
+      .then(setData)
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [])
+
+  if (error) {
+    return (
+      <div className="rounded-xl border border-red-800 bg-red-950/30 p-6 text-red-300">
+        <p className="font-medium">Failed to load dashboard</p>
+        <p className="text-sm mt-1">{error}</p>
+        <p className="text-sm mt-2 text-muted-foreground">
+          Make sure <code className="text-xs bg-muted px-1 py-0.5 rounded">SLEEPER_USER_ID</code> is set in <code className="text-xs bg-muted px-1 py-0.5 rounded">.env</code> and the backend is running.
+        </p>
+      </div>
+    )
+  }
+
+  const stats = data?.overall_stats
+
+  return (
+    <div className="space-y-8">
+
+      {/* ── Section 1: My Trade Record ─────────────────────────── */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold">My Trade Record</h2>
+          <span className="text-xs text-muted-foreground">All leagues · all seasons</span>
+        </div>
+
+        {loading ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[1,2,3,4].map(i => <Skeleton key={i} className="h-20" />)}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <StatCard
+              label="Total Trades"
+              value={stats ? String(stats.total_trades) : '—'}
+              sub={stats ? `${stats.graded_trades} graded` : undefined}
+            />
+            <StatCard
+              label="Win Rate"
+              value={stats?.win_rate != null ? `${Math.round(stats.win_rate * 100)}%` : '—'}
+              sub={stats ? `${stats.wins}W / ${stats.losses}L / ${stats.neutrals}N` : undefined}
+              color={stats?.win_rate != null ? stats.win_rate >= 0.5 ? 'text-green-400' : stats.win_rate >= 0.35 ? 'text-yellow-400' : 'text-red-400' : undefined}
+            />
+            <StatCard
+              label="Avg Decision"
+              value={stats?.avg_decision_differential != null ? pct(stats.avg_decision_differential) : '—'}
+              sub="per trade differential"
+              color={stats?.avg_decision_differential != null ? stats.avg_decision_differential >= 0.03 ? 'text-green-400' : stats.avg_decision_differential <= -0.03 ? 'text-red-400' : 'text-yellow-400' : undefined}
+            />
+            <StatCard
+              label="Avg Outcome"
+              value={stats?.avg_outcome_differential != null ? pct(stats.avg_outcome_differential) : '—'}
+              sub="current values"
+              color={stats?.avg_outcome_differential != null ? stats.avg_outcome_differential >= 0.03 ? 'text-green-400' : stats.avg_outcome_differential <= -0.03 ? 'text-red-400' : 'text-yellow-400' : undefined}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* ── Section 2: My Biggest Biases ──────────────────────── */}
+      {(loading || (data?.bias_highlights && data.bias_highlights.length > 0)) && (
+        <div>
+          <h2 className="text-lg font-semibold mb-4">My Trading Tendencies</h2>
+          {loading ? (
+            <div className="grid md:grid-cols-3 gap-3">
+              {[1,2,3].map(i => <Skeleton key={i} className="h-16" />)}
+            </div>
+          ) : (
+            <div className="grid md:grid-cols-3 gap-3">
+              {data!.bias_highlights.map((h, i) => <BiasCard key={i} highlight={h} />)}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Section 3: Recent Trades ───────────────────────────── */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">Recent Trades</h2>
+          <Link to="/leagues" className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+            Browse all leagues →
+          </Link>
+        </div>
+
+        <Card className="bg-card">
+          <CardContent className="p-2">
+            {loading ? (
+              <div className="space-y-1">
+                {[1,2,3,4,5].map(i => <Skeleton key={i} className="h-12 w-full" />)}
+              </div>
+            ) : !data?.recent_trades.length ? (
+              <p className="text-sm text-muted-foreground text-center py-8">No trades found. Run <code className="text-xs bg-muted px-1 py-0.5 rounded">make ingest</code> to load your data.</p>
+            ) : (
+              <div className="divide-y divide-border/50">
+                {data.recent_trades.map(t => (
+                  <RecentTradeRow key={t.trade_id} trade={t} />
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* ── Section 4: Trade Targets ───────────────────────────── */}
+      <div>
+        <div className="mb-4">
+          <h2 className="text-lg font-semibold">Trade Targets</h2>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Ranked by opportunity — who to call based on their tendencies and your posture.
+            Set your posture per league to sharpen the rankings.
+          </p>
+        </div>
+
+        {loading ? (
+          <div className="space-y-4">
+            {[1,2].map(i => <Skeleton key={i} className="h-48 w-full rounded-xl" />)}
+          </div>
+        ) : !data?.leagues.length ? (
+          <p className="text-sm text-muted-foreground">No leagues found.</p>
+        ) : (
+          <div className="space-y-4">
+            {data.leagues.map(league => (
+              <TradeTargets
+                key={league.league_id}
+                leagueId={league.league_id}
+                leagueName={league.name}
+                initialPosture={league.my_posture}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+    </div>
+  )
+}

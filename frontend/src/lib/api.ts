@@ -1,0 +1,303 @@
+/**
+ * Typed API client for the FastAPI backend.
+ * All requests go to /api/* which the Vite proxy forwards to localhost:8000.
+ */
+
+export interface LeagueSeason {
+  league_id: string
+  season: number
+  trade_count: number
+}
+
+export interface League {
+  name: string
+  format_key: string
+  seasons: LeagueSeason[]
+}
+
+export interface GradeResult {
+  grade_type: string
+  total_value_received: number
+  total_value_given: number
+  differential: number
+  letter_grade: string
+  used_value_fallback: number
+}
+
+export interface AssetItem {
+  type: 'player' | 'pick' | 'faab'
+  // player
+  player_id?: string
+  name?: string
+  position?: string
+  // pick
+  pick_season?: number
+  pick_round?: number
+  label?: string
+  // faab
+  amount?: number
+}
+
+export interface TradeSide {
+  roster_id: number
+  user_id: string
+  manager_name: string
+  assets_received: AssetItem[]
+  assets_given?: AssetItem[]
+  decision_grade: GradeResult | null
+  outcome_grade: GradeResult | null
+}
+
+export interface Trade {
+  trade_id: string
+  season: number
+  week: number
+  executed_at: string | null
+  sides: TradeSide[]
+}
+
+export interface TradesResponse {
+  league_id: string
+  league_name: string
+  format_key: string
+  total: number
+  page: number
+  page_size: number
+  trades: Trade[]
+}
+
+// ── Phase 4: Me / Dashboard types ───────────────────────────────────────────
+
+export interface BiasHighlight {
+  type: string
+  label: string
+  avg_differential: number
+  count: number
+  wins: number
+  losses: number
+  severity: number
+  direction: string
+}
+
+export interface RecentTrade {
+  trade_id: string
+  league_id: string
+  league_name: string
+  season: number
+  week: number
+  executed_at: string | null
+  decision_grade: string | null
+  outcome_grade: string | null
+  decision_differential: number
+  assets_received: string[]
+  assets_given: string[]
+}
+
+export interface LeagueSummaryForDashboard {
+  league_id: string
+  name: string
+  format_key: string
+  my_posture: string
+}
+
+export interface DashboardData {
+  user_id: string
+  overall_stats: DifferentialStats | null
+  bias_highlights: BiasHighlight[]
+  recent_trades: RecentTrade[]
+  leagues: LeagueSummaryForDashboard[]
+}
+
+export interface PositionalNeed {
+  my_value: number
+  league_avg: number
+  need_score: number   // positive = need, negative = surplus
+  label: string        // 'need' | 'slight need' | 'average' | 'slight surplus' | 'surplus'
+  // picks-only fields
+  net_pick_value?: number
+  net_future_picks?: number
+}
+
+export interface PositionalNeeds {
+  format_key: string
+  snapshot_date: string | null
+  my_values: Record<string, number>
+  league_avg: Record<string, number>
+  needs: Record<string, PositionalNeed>
+}
+
+export interface TradeTarget {
+  user_id: string
+  manager_name: string
+  their_posture: string
+  posture_is_override: boolean
+  overpay_score: number
+  mismatch_score: number
+  pos_fit_score: number
+  opportunity_score: number
+  fills_my_need: string[]
+  wants_my_surplus: string[]
+  pick_capital_score: number
+  avg_decision_differential: number | null
+  win_rate: number | null
+  total_trades: number
+  actionable_summary: string
+}
+
+export interface TradeTargetsResponse {
+  league_id: string
+  league_name: string
+  my_posture: string
+  positional_needs: PositionalNeeds
+  targets: TradeTarget[]
+}
+
+// ── Phase 3: Manager profile types ──────────────────────────────────────────
+
+export interface ManagerSummary {
+  user_id: string
+  manager_name: string
+  total_trades: number
+  graded_trades: number
+  avg_decision_differential: number | null
+  wins: number
+  losses: number
+  neutrals: number
+  win_rate: number | null
+  best_grade: string | null
+  worst_grade: string | null
+}
+
+export interface BiasStat {
+  count: number
+  avg_differential: number | null
+  wins: number
+  losses: number
+  neutrals: number
+}
+
+export interface PositionBias {
+  acquiring: BiasStat
+  shedding: BiasStat
+}
+
+export interface AgeBias {
+  label: string
+  acquiring: BiasStat
+  shedding: BiasStat
+}
+
+export interface PosturePatterns {
+  rebuild: BiasStat
+  contend: BiasStat
+  neutral: BiasStat
+  stuck_signal: boolean
+  note: string
+}
+
+export interface DifferentialStats {
+  total_trades: number
+  graded_trades: number
+  avg_decision_differential: number | null
+  avg_outcome_differential: number | null
+  best_decision_trade: { trade_id: string; differential: number; letter_grade: string; executed_at: string } | null
+  worst_decision_trade: { trade_id: string; differential: number; letter_grade: string; executed_at: string } | null
+  wins: number
+  losses: number
+  neutrals: number
+  win_rate: number | null
+}
+
+export interface ManagerProfile {
+  user_id: string
+  manager_name: string
+  anchor_league_id: string
+  scope: string
+  scope_label: string
+  leagues_included: string[]
+  seasons_included: number[]
+  differential_stats: DifferentialStats
+  position_biases: Record<string, PositionBias>
+  age_biases: Record<string, AgeBias>
+  posture_patterns: PosturePatterns
+  scouting_report: string | null
+  profile_hash: string
+  anthropic_configured: boolean
+}
+
+async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(path, options)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`API error ${res.status}: ${text}`)
+  }
+  return res.json() as Promise<T>
+}
+
+export const api = {
+  getMe: () => apiFetch<{ user_id: string; username: string; display_name: string }>('/api/me'),
+
+  getDashboard: () => apiFetch<DashboardData>('/api/me/dashboard'),
+
+  getTradeTargets: (leagueId: string) =>
+    apiFetch<TradeTargetsResponse>(`/api/leagues/${leagueId}/trade-targets`),
+
+  getMyPosture: (leagueId: string) =>
+    apiFetch<{ league_id: string; posture: string; is_override: boolean }>(
+      `/api/leagues/${leagueId}/my-posture`
+    ),
+
+  setMyPosture: (leagueId: string, posture: string) =>
+    apiFetch<{ league_id: string; posture: string; is_override: boolean }>(
+      `/api/leagues/${leagueId}/my-posture`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ posture }),
+      }
+    ),
+
+  setManagerPosture: (leagueId: string, targetUserId: string, posture: string) =>
+    apiFetch<{ user_id: string; league_id: string; posture: string }>(
+      `/api/leagues/${leagueId}/managers/${targetUserId}/posture`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ posture }),
+      }
+    ),
+
+  getLeagues: () =>
+    apiFetch<{ leagues: League[] }>('/api/leagues'),
+
+  getTrades: (leagueId: string, page = 1, season?: number) => {
+    const params = new URLSearchParams({ page: String(page), page_size: '50' })
+    if (season) params.set('season', String(season))
+    return apiFetch<TradesResponse>(`/api/leagues/${leagueId}/trades?${params}`)
+  },
+
+  getTrade: (tradeId: string) =>
+    apiFetch<Trade>(`/api/trades/${tradeId}`),
+
+  recomputeGrades: (body: { league_id?: string; trade_id?: string }) =>
+    apiFetch<{ status: string }>('/api/grading/recompute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  getManagers: (leagueId: string, scope = 'family') =>
+    apiFetch<{ league_id: string; league_name: string; scope: string; managers: ManagerSummary[] }>(
+      `/api/leagues/${leagueId}/managers?scope=${scope}`
+    ),
+
+  getManagerProfile: (leagueId: string, userId: string, scope = 'family') =>
+    apiFetch<ManagerProfile>(`/api/leagues/${leagueId}/managers/${userId}?scope=${scope}`),
+
+  generateScoutingReport: (userId: string, leagueId: string, scope = 'family') =>
+    apiFetch<{ report: string; cached: boolean }>('/api/managers/' + userId + '/scouting_report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ league_id: leagueId, scope }),
+    }),
+}
