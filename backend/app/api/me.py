@@ -17,6 +17,7 @@ from datetime import date
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.acquire import acquisition_report
 from app.db import get_connection
 from app.profiles.engine import (
     _get_manager_trades,
@@ -399,6 +400,32 @@ def get_roster_needs(league_id: str):
         # Strip all_managers (large, not needed by the frontend needs chart)
         needs.pop("all_managers", None)
         return {"league_id": league_id, **needs}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# GET /api/leagues/{league_id}/acquire/{position}
+# ---------------------------------------------------------------------------
+
+@router.get("/api/leagues/{league_id}/acquire/{position}")
+def get_acquisition_report(league_id: str, position: str):
+    """
+    "I want to acquire a {position} in this league" — ranked source managers
+    with player-level detail and suggested packages.
+    """
+    uid = _require_user_id()
+    conn = _conn()
+    try:
+        league = conn.execute(
+            "SELECT id FROM leagues WHERE id = ?", (league_id,)
+        ).fetchone()
+        if not league:
+            raise HTTPException(status_code=404, detail=f"League {league_id} not found")
+        try:
+            return acquisition_report(conn, uid, league_id, position)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     finally:
         conn.close()
 

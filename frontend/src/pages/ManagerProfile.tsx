@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
-  RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer,
+  ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, Tooltip as RechartTooltip, ReferenceLine, Cell,
 } from 'recharts'
 import ReactMarkdown from 'react-markdown'
-import { api, type ManagerProfile, type BiasStat } from '@/lib/api'
+import { api, type ManagerProfile } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -85,12 +85,13 @@ function BiasChart({
           <ReferenceLine x={0} stroke="#444" />
           <RechartTooltip
             cursor={{ fill: 'rgba(255,255,255,0.04)' }}
-            formatter={(v: number, _name: string, props) => {
-              const entry = props.payload
+            formatter={(v, _name, props) => {
+              const entry = (props as { payload?: { hasData?: boolean; count?: number } }).payload
               if (!entry?.hasData) return ['No data', '']
-              const sign = v >= 0 ? '+' : ''
-              const label = v >= 0 ? positiveLabel : negativeLabel
-              return [`${sign}${v}% — ${label} (${entry.count} trades)`, title]
+              const num = Number(v)
+              const sign = num >= 0 ? '+' : ''
+              const label = num >= 0 ? positiveLabel : negativeLabel
+              return [`${sign}${num}% — ${label} (${entry.count} trades)`, title]
             }}
             contentStyle={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: 6, fontSize: 12 }}
             labelStyle={{ color: '#aaa' }}
@@ -441,6 +442,64 @@ export default function ManagerProfile() {
         </CardContent>
       </Card>
 
+      {/* Draft capital conversion */}
+      {profile.pick_conversion && (
+        <Card className="bg-card">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Draft Capital Conversion</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              What actually became of the picks this manager traded for and traded away —
+              each pick resolved to the player drafted with it, valued today vs the pick's cost at trade time.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {profile.pick_conversion.tendency && (
+              <p className="text-sm text-primary leading-relaxed">{profile.pick_conversion.tendency}</p>
+            )}
+            <div className="grid sm:grid-cols-2 gap-4">
+              {([['acquired', 'Picks Acquired'], ['shed', 'Picks Traded Away']] as const).map(([key, label]) => {
+                const side = profile.pick_conversion![key]
+                return (
+                  <div key={key} className="rounded-lg border border-border p-3 space-y-1.5">
+                    <p className="text-sm font-medium">{label}</p>
+                    {side.resolved === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        {side.count === 0 ? 'No picks traded' : `${side.count} picks, none resolved to players yet`}
+                      </p>
+                    ) : (
+                      <>
+                        <p className="text-lg font-semibold font-mono">
+                          <span className={cn(
+                            (side.median_return_ratio ?? 0) >= 1 ? 'text-green-400'
+                              : (side.median_return_ratio ?? 0) < 0.6 ? 'text-red-400' : 'text-yellow-400'
+                          )}>
+                            {side.median_return_ratio}x
+                          </span>
+                          <span className="text-xs text-muted-foreground font-normal ml-1.5">median return</span>
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {side.resolved} resolved of {side.count} · hit {Math.round((side.hit_rate ?? 0) * 100)}% · bust {Math.round((side.bust_rate ?? 0) * 100)}%
+                        </p>
+                        {side.best && side.best.ratio >= 1.2 && (
+                          <p className="text-xs">
+                            <span className="text-green-400">Best:</span> {side.best.pick_label} → {side.best.player_name} ({side.best.cost_at_trade.toLocaleString()} → {side.best.value_now.toLocaleString()})
+                          </p>
+                        )}
+                        {side.worst && side.worst.ratio < 0.8 && (
+                          <p className="text-xs">
+                            <span className="text-red-400">Worst:</span> {side.worst.pick_label} → {side.worst.player_name} ({side.worst.cost_at_trade.toLocaleString()} → {side.worst.value_now.toLocaleString()})
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Scouting report */}
       <Card className="bg-card">
         <CardHeader className="pb-2">
@@ -457,13 +516,15 @@ export default function ManagerProfile() {
               </Button>
             ) : (
               <Tooltip>
-                <TooltipTrigger asChild>
-                  <span>
-                    <Button size="sm" variant="outline" disabled>
-                      Generate Scouting Report
-                    </Button>
-                  </span>
-                </TooltipTrigger>
+                <TooltipTrigger
+                  render={
+                    <span>
+                      <Button size="sm" variant="outline" disabled>
+                        Generate Scouting Report
+                      </Button>
+                    </span>
+                  }
+                />
                 <TooltipContent>
                   Set ANTHROPIC_API_KEY in your .env file to enable this feature.
                 </TooltipContent>

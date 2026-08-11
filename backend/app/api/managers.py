@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.db import get_connection
+from app.pick_conversion import compute_pick_conversion
 from app.profiles.engine import (
     compute_league_profiles,
     compute_profile,
@@ -102,8 +103,13 @@ def get_manager_profile(
         if cached and cached["profile_hash"] == phash_keyed:
             scouting_report = cached["report_text"]
 
+        # Added after the hash so scouting-report cache keys stay stable
+        # regardless of pick-conversion recomputation.
+        pick_conversion = compute_pick_conversion(conn, user_id, league_id)
+
         return {
             **profile,
+            "pick_conversion": pick_conversion,
             "scouting_report": scouting_report,
             "profile_hash": phash,
             "anthropic_configured": bool(ANTHROPIC_API_KEY),
@@ -157,6 +163,7 @@ def generate_scouting_report(user_id: str, body: ScoutingReportRequest):
 
             # Send only the structured profile data — no raw trade JSON
             profile_summary = {k: v for k, v in profile.items() if k not in ("scouting_report",)}
+            profile_summary["pick_conversion"] = compute_pick_conversion(conn, user_id, body.league_id)
             user_content = json.dumps(profile_summary, indent=2, default=str)
 
             message = client.messages.create(

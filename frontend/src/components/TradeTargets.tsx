@@ -2,9 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, type TradeTarget, type TradeTargetsResponse, type PositionalNeeds } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
@@ -190,7 +188,7 @@ function TargetCard({
         <span className="text-xs text-muted-foreground">Their posture:</span>
         <Select
           value={target.their_posture}
-          onValueChange={handlePostureChange}
+          onValueChange={v => { if (v) void handlePostureChange(v) }}
           disabled={saving}
         >
           <SelectTrigger className="h-6 text-xs w-28 border-0 bg-transparent p-0 shadow-none focus:ring-0 hover:text-foreground">
@@ -264,7 +262,7 @@ export function TradeTargets({ leagueId, leagueName, initialPosture }: TradeTarg
           <CardTitle className="text-sm font-semibold">{leagueName}</CardTitle>
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground">My posture:</span>
-            <Select value={myPosture} onValueChange={handleMyPostureChange} disabled={saving}>
+            <Select value={myPosture} onValueChange={v => { if (v) void handleMyPostureChange(v) }} disabled={saving}>
               <SelectTrigger className="h-7 text-xs w-32">
                 <SelectValue />
               </SelectTrigger>

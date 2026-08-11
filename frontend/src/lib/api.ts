@@ -152,6 +152,100 @@ export interface TradeTargetsResponse {
   targets: TradeTarget[]
 }
 
+// ── Acquisition tool types ──────────────────────────────────────────────────
+
+export interface AcquirePlayer {
+  player_id: string
+  name: string
+  team: string | null
+  age: number | null
+  value: number
+  rank: number
+  position?: string
+  likely_available?: boolean
+  availability_reason?: string | null
+}
+
+export interface PickInventoryItem {
+  season: number
+  round: number
+  label: string
+  value: number
+  via: 'own' | 'acquired'
+}
+
+export interface DealPackageItem {
+  label: string
+  value: number
+}
+
+export interface DealPackage {
+  kind: 'picks_only' | 'player_plus_pick' | 'player_swap'
+  items: DealPackageItem[]
+  package_value: number
+  sticker_value: number
+  adjusted_target_value: number
+  rationale: string
+}
+
+export interface AcquireSuggestion {
+  player: AcquirePlayer
+  packages: DealPackage[]
+}
+
+export interface PickConversionSide {
+  count: number
+  resolved: number
+  pending: number
+  avg_return_ratio: number | null
+  median_return_ratio: number | null
+  hit_rate: number | null
+  bust_rate: number | null
+  best: { player_name: string; pick_label: string; cost_at_trade: number; value_now: number; ratio: number } | null
+  worst: { player_name: string; pick_label: string; cost_at_trade: number; value_now: number; ratio: number } | null
+}
+
+export interface PickConversion {
+  acquired: PickConversionSide
+  shed: PickConversionSide
+  tendency: string | null
+}
+
+export interface AcquireTarget {
+  user_id: string
+  manager_name: string
+  their_posture: string
+  acquisition_score: number
+  scores: { surplus: number; seller: number; willingness: number; payment: number }
+  position_value: number
+  surplus_pct: number
+  shed_bias: number | null
+  shed_count: number
+  avg_decision_differential: number | null
+  total_trades: number
+  pick_conversion: PickConversion
+  pick_capital_score: number
+  players: AcquirePlayer[]
+  suggestions: AcquireSuggestion[]
+  summary: string
+}
+
+export interface AcquireResponse {
+  league_id: string
+  league_name: string
+  position: string
+  format_key: string
+  snapshot_date: string | null
+  my_context: {
+    my_value: number
+    league_avg: number
+    surplus_positions: string[]
+    pick_inventory: PickInventoryItem[]
+    offerable_players: AcquirePlayer[]
+  }
+  targets: AcquireTarget[]
+}
+
 // ── Phase 3: Manager profile types ──────────────────────────────────────────
 
 export interface ManagerSummary {
@@ -220,6 +314,7 @@ export interface ManagerProfile {
   position_biases: Record<string, PositionBias>
   age_biases: Record<string, AgeBias>
   posture_patterns: PosturePatterns
+  pick_conversion?: PickConversion
   scouting_report: string | null
   profile_hash: string
   anthropic_configured: boolean
@@ -241,6 +336,9 @@ export const api = {
 
   getTradeTargets: (leagueId: string) =>
     apiFetch<TradeTargetsResponse>(`/api/leagues/${leagueId}/trade-targets`),
+
+  getAcquire: (leagueId: string, position: string) =>
+    apiFetch<AcquireResponse>(`/api/leagues/${leagueId}/acquire/${position}`),
 
   getMyPosture: (leagueId: string) =>
     apiFetch<{ league_id: string; posture: string; is_override: boolean }>(

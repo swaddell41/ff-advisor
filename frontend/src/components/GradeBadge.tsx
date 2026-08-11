@@ -38,7 +38,7 @@ export function GradeBadge({ grade, showFallbackWarning = true, className }: Gra
 
   return (
     <Tooltip>
-      <TooltipTrigger asChild>{badge}</TooltipTrigger>
+      <TooltipTrigger render={badge} />
       <TooltipContent side="top" className="text-xs space-y-0.5">
         <p>Received: {grade.total_value_received.toLocaleString()}</p>
         <p>Given: {grade.total_value_given.toLocaleString()}</p>
