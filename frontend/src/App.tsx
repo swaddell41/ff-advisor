@@ -2,6 +2,7 @@ import { Routes, Route, Link, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import MyDashboard from '@/pages/MyDashboard'
 import AcquireTool from '@/pages/AcquireTool'
+import SellTool from '@/pages/SellTool'
 import LeaguePicker from '@/pages/LeaguePicker'
 import TradeHistory from '@/pages/TradeHistory'
 import TradeDetail from '@/pages/TradeDetail'
@@ -35,6 +36,7 @@ export default function App() {
           <nav className="flex items-center gap-4">
             <NavLink to="/">My Dashboard</NavLink>
             <NavLink to="/acquire">Acquire</NavLink>
+            <NavLink to="/sell">Sell</NavLink>
             <NavLink to="/leagues">Browse Leagues</NavLink>
           </nav>
         </div>
@@ -55,6 +57,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<MyDashboard />} />
           <Route path="/acquire" element={<AcquireTool />} />
+          <Route path="/sell" element={<SellTool />} />
           <Route path="/leagues" element={<LeaguePicker />} />
           <Route path="/leagues/:leagueId/trades" element={<TradeHistory />} />
           <Route path="/leagues/:leagueId/managers" element={<ManagerList />} />

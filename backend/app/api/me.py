@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from app.acquire import acquisition_report
 from app.db import get_connection
+from app.sell import my_assets, sell_report
 from app.profiles.engine import (
     _get_manager_trades,
     classify_posture,
@@ -426,6 +427,48 @@ def get_acquisition_report(league_id: str, position: str):
             return acquisition_report(conn, uid, league_id, position)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Sell tool
+# ---------------------------------------------------------------------------
+
+@router.get("/api/leagues/{league_id}/my-assets")
+def get_my_assets(league_id: str):
+    """Everything I could sell in this league: roster players + future picks."""
+    uid = _require_user_id()
+    conn = _conn()
+    try:
+        return my_assets(conn, uid, league_id)
+    finally:
+        conn.close()
+
+
+@router.get("/api/leagues/{league_id}/sell/player/{player_id}")
+def get_sell_player(league_id: str, player_id: str):
+    """Ranked buyers for one of my players."""
+    uid = _require_user_id()
+    conn = _conn()
+    try:
+        try:
+            return sell_report(conn, uid, league_id, {"type": "player", "player_id": player_id})
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+    finally:
+        conn.close()
+
+
+@router.get("/api/leagues/{league_id}/sell/pick/{season}/{round_num}")
+def get_sell_pick(league_id: str, season: int, round_num: int):
+    """Ranked buyers for one of my future picks."""
+    uid = _require_user_id()
+    conn = _conn()
+    try:
+        return sell_report(
+            conn, uid, league_id, {"type": "pick", "season": season, "round": round_num}
+        )
     finally:
         conn.close()
 

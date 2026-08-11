@@ -246,6 +246,64 @@ export interface AcquireResponse {
   targets: AcquireTarget[]
 }
 
+// ── Sell tool types ─────────────────────────────────────────────────────────
+
+export interface MyAssetsResponse {
+  league_id: string
+  current_league_id: string
+  format_key: string
+  snapshot_date: string | null
+  players: AcquirePlayer[]
+  picks: PickInventoryItem[]
+}
+
+export interface SellAsset {
+  type: 'player' | 'pick'
+  player_id?: string
+  season?: number
+  round?: number
+  name: string
+  position: string | null
+  team?: string | null
+  age: number | null
+  value: number
+}
+
+export interface AskPackage {
+  kind: 'picks_only' | 'player' | 'player_plus_pick'
+  items: DealPackageItem[]
+  ask_total: number
+}
+
+export interface SellBuyer {
+  user_id: string
+  manager_name: string
+  their_posture: string
+  buyer_score: number
+  scores: { need: number; overpay: number; posture: number; payment: number }
+  acq_pos_bias: number | null
+  acq_pos_count: number
+  avg_decision_differential: number | null
+  total_trades: number
+  pick_capital_score: number
+  their_picks: PickInventoryItem[]
+  premium_pct: number
+  premium_reasons: string[]
+  ask_value: number
+  asks: AskPackage[]
+  summary: string
+}
+
+export interface SellResponse {
+  league_id: string
+  league_name: string
+  format_key: string
+  snapshot_date: string | null
+  asset: SellAsset
+  my_need_positions: string[]
+  buyers: SellBuyer[]
+}
+
 // ── Phase 3: Manager profile types ──────────────────────────────────────────
 
 export interface ManagerSummary {
@@ -342,6 +400,15 @@ export const api = {
 
   getRosterNeeds: (leagueId: string) =>
     apiFetch<PositionalNeeds & { league_id: string }>(`/api/me/roster-needs/${leagueId}`),
+
+  getMyAssets: (leagueId: string) =>
+    apiFetch<MyAssetsResponse>(`/api/leagues/${leagueId}/my-assets`),
+
+  getSellPlayer: (leagueId: string, playerId: string) =>
+    apiFetch<SellResponse>(`/api/leagues/${leagueId}/sell/player/${playerId}`),
+
+  getSellPick: (leagueId: string, season: number, round: number) =>
+    apiFetch<SellResponse>(`/api/leagues/${leagueId}/sell/pick/${season}/${round}`),
 
   getMyPosture: (leagueId: string) =>
     apiFetch<{ league_id: string; posture: string; is_override: boolean }>(
