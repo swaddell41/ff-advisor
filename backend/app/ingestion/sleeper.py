@@ -61,18 +61,16 @@ class SleeperClient:
         """GET /v1/league/{league_id}/rosters"""
         return self._get(f"/v1/league/{league_id}/rosters", ttl=CACHE_TTL_SECONDS)
 
-    def get_transactions(self, league_id: str, week: int) -> list[dict]:
+    def get_transactions(self, league_id: str, week: int, mutable: bool = False) -> list[dict]:
         """
         GET /v1/league/{league_id}/transactions/{week}
 
-        Past weeks are cached forever — Sleeper never changes them.
-        Week 0 (pre-season / free agency) uses the short TTL.
+        Completed-season responses never change, so they're cached forever.
+        For the league's current season (mutable=True) every week uses the
+        short TTL — offseason trades keep landing in week 1, and future
+        weeks fill in as the season progresses.
         """
-        # We treat any week <= the previous week as immutable.
-        # The caller is responsible for deciding which weeks are "past";
-        # we simply use a very long TTL for all of them, and a short TTL
-        # for week 0 (waivers) as a conservative default.
-        ttl = CACHE_TTL_SECONDS if week == 0 else None  # None = cache forever
+        ttl = CACHE_TTL_SECONDS if (mutable or week == 0) else None  # None = cache forever
         return self._get(f"/v1/league/{league_id}/transactions/{week}", ttl=ttl)
 
     def get_league_drafts(self, league_id: str) -> list[dict]:

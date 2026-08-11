@@ -264,16 +264,20 @@ def ingest_trades(
     league_id: str,
     season: int | None,
     roster_to_user: dict[int, str],
+    mutable: bool = False,
 ) -> int:
     """
     Ingest all trades from weeks 1-MAX_WEEKS for a league.
+
+    mutable=True marks this as the league's current (in-progress) season,
+    so weekly transaction responses are re-fetched instead of cached forever.
 
     Returns the number of new trades stored.
     """
     trades_stored = 0
 
     for week in range(1, MAX_WEEKS + 1):
-        transactions = client.get_transactions(league_id, week)
+        transactions = client.get_transactions(league_id, week, mutable=mutable)
         if not transactions:
             continue
 
@@ -542,7 +546,12 @@ def main() -> None:
             all_manager_ids.update(roster_to_user.values())
 
             season = league.get("season")
-            trades = ingest_trades(conn, client, league_id, season, roster_to_user)
+            # The root league (from LEAGUE_IDS) is the current season — its
+            # weekly transaction lists are still changing.
+            trades = ingest_trades(
+                conn, client, league_id, season, roster_to_user,
+                mutable=(league_id == root_league_id),
+            )
             total_trades += trades
             total_seasons += 1
 
