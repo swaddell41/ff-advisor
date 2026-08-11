@@ -340,6 +340,9 @@ export const api = {
   getAcquire: (leagueId: string, position: string) =>
     apiFetch<AcquireResponse>(`/api/leagues/${leagueId}/acquire/${position}`),
 
+  getRosterNeeds: (leagueId: string) =>
+    apiFetch<PositionalNeeds & { league_id: string }>(`/api/me/roster-needs/${leagueId}`),
+
   getMyPosture: (leagueId: string) =>
     apiFetch<{ league_id: string; posture: string; is_override: boolean }>(
       `/api/leagues/${leagueId}/my-posture`

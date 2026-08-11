@@ -7,6 +7,7 @@ import {
   type AcquirePlayer,
   type DealPackage,
   type LeagueSummaryForDashboard,
+  type PositionalNeeds,
 } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -171,8 +172,107 @@ function TargetCard({ target, leagueId }: { target: AcquireTarget; leagueId: str
   )
 }
 
+function needChipClass(score: number, clickable: boolean): string {
+  const base = clickable ? 'cursor-pointer hover:ring-2 hover:ring-ring/40 ' : ''
+  if (score > 0.05)
+    return base + 'border-red-300 bg-red-100 text-red-900 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300'
+  if (score < -0.05)
+    return base + 'border-green-300 bg-green-100 text-green-900 dark:border-green-800 dark:bg-green-950/40 dark:text-green-300'
+  return base + 'border-border text-muted-foreground'
+}
+
+function NeedsOverview({
+  leagues,
+  allNeeds,
+  activeLeagueId,
+  activePosition,
+  onSelect,
+}: {
+  leagues: LeagueSummaryForDashboard[]
+  allNeeds: Record<string, PositionalNeeds>
+  activeLeagueId: string
+  activePosition: string
+  onSelect: (leagueId: string, position: string) => void
+}) {
+  if (leagues.length === 0) return null
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold">Where your teams are thin</CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Roster value vs league average, per position. Click a{' '}
+          <span className="text-red-400 font-medium">red need</span> to hunt for it below.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {leagues.map(l => {
+          const needs = allNeeds[l.league_id]
+          const biggest = needs
+            ? Object.entries(needs.needs)
+                .filter(([pos]) => pos !== 'PICKS')
+                .sort((a, b) => b[1].need_score - a[1].need_score)[0]
+            : null
+          return (
+            <div key={l.league_id} className="flex items-center gap-3 flex-wrap">
+              <span
+                className={cn(
+                  'text-xs font-medium w-44 truncate',
+                  l.league_id === activeLeagueId ? 'text-foreground' : 'text-muted-foreground'
+                )}
+              >
+                {l.name}
+              </span>
+              {!needs ? (
+                <Skeleton className="h-6 w-64 rounded" />
+              ) : (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {['QB', 'RB', 'WR', 'TE', 'PICKS'].map(pos => {
+                    const d = needs.needs[pos]
+                    if (!d) return null
+                    const clickable = pos !== 'PICKS'
+                    const active = l.league_id === activeLeagueId && pos === activePosition
+                    return (
+                      <button
+                        key={pos}
+                        disabled={!clickable}
+                        onClick={() => clickable && onSelect(l.league_id, pos)}
+                        title={
+                          pos === 'PICKS'
+                            ? `Draft capital: ${d.label}`
+                            : `${pos}: you ${(d.my_value / 1000).toFixed(1)}k vs ${(d.league_avg / 1000).toFixed(1)}k avg — ${d.label}`
+                        }
+                        className={cn(
+                          'text-xs px-2 py-0.5 rounded border font-mono transition-all',
+                          needChipClass(d.need_score, clickable),
+                          active && 'ring-2 ring-ring'
+                        )}
+                      >
+                        {pos === 'PICKS' ? 'PKS' : pos}{' '}
+                        {d.need_score > 0.05 ? '▼' : d.need_score < -0.05 ? '▲' : '—'}
+                        {Math.abs(d.need_score) > 0.05 && (
+                          <span className="opacity-70"> {Math.round(Math.abs(d.need_score) * 100)}%</span>
+                        )}
+                      </button>
+                    )
+                  })}
+                  {biggest && biggest[1].need_score > 0.05 && (
+                    <span className="text-xs text-muted-foreground italic ml-1">
+                      → go get a {biggest[0]}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function AcquireTool() {
   const [leagues, setLeagues] = useState<LeagueSummaryForDashboard[]>([])
+  const [allNeeds, setAllNeeds] = useState<Record<string, PositionalNeeds>>({})
   const [leagueId, setLeagueId] = useState<string>('')
   const [position, setPosition] = useState<string>('WR')
   const [data, setData] = useState<AcquireResponse | null>(null)
@@ -182,6 +282,11 @@ export default function AcquireTool() {
     api.getDashboard().then(d => {
       setLeagues(d.leagues)
       if (d.leagues.length > 0) setLeagueId(d.leagues[0].league_id)
+      d.leagues.forEach(l => {
+        api.getRosterNeeds(l.league_id)
+          .then(n => setAllNeeds(prev => ({ ...prev, [l.league_id]: n })))
+          .catch(console.error)
+      })
     }).catch(console.error)
   }, [])
 
@@ -206,7 +311,11 @@ export default function AcquireTool() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Select value={leagueId} onValueChange={v => { if (v) setLeagueId(v) }}>
+          <Select
+            value={leagueId}
+            onValueChange={v => { if (v) setLeagueId(v) }}
+            items={Object.fromEntries(leagues.map(l => [l.league_id, l.name]))}
+          >
             <SelectTrigger className="h-8 text-xs w-52">
               <SelectValue placeholder="Select league" />
             </SelectTrigger>
@@ -236,6 +345,15 @@ export default function AcquireTool() {
           </div>
         </div>
       </div>
+
+      {/* Needs overview across all my teams */}
+      <NeedsOverview
+        leagues={leagues}
+        allNeeds={allNeeds}
+        activeLeagueId={leagueId}
+        activePosition={position}
+        onSelect={(lid, pos) => { setLeagueId(lid); setPosition(pos) }}
+      />
 
       {/* My context strip */}
       {ctx && !loading && (
