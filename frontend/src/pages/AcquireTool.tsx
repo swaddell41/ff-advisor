@@ -70,14 +70,17 @@ function PlayerChip({ p }: { p: AcquirePlayer }) {
 }
 
 function PackageCard({ pkg }: { pkg: DealPackage }) {
-  const diff = pkg.package_value - pkg.adjusted_target_value
-  const fair = Math.abs(diff) <= pkg.adjusted_target_value * 0.1
+  const light = pkg.package_value < pkg.adjusted_target_value * 0.95
+  const fair = !light && pkg.package_value <= pkg.adjusted_target_value * 1.1
   return (
     <div className="rounded-lg border border-border/70 bg-background/50 p-2.5 space-y-1">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-semibold">{PACKAGE_KIND_LABELS[pkg.kind] ?? pkg.kind}</span>
-        <span className={cn('text-xs font-mono', fair ? 'text-green-400' : 'text-yellow-400')}>
-          {(pkg.package_value / 1000).toFixed(1)}k vs {(pkg.adjusted_target_value / 1000).toFixed(1)}k ask
+        <span
+          className={cn('text-xs font-mono', fair ? 'text-green-400' : 'text-yellow-400')}
+          title="'Their price' is what this manager is likely to demand for this payment mix — pick-heavy offers get cheaper when their accepted picks historically bust."
+        >
+          give {(pkg.package_value / 1000).toFixed(1)}k · their price {(pkg.adjusted_target_value / 1000).toFixed(1)}k
         </span>
       </div>
       <p className="text-xs font-mono">
@@ -87,8 +90,13 @@ function PackageCard({ pkg }: { pkg: DealPackage }) {
         {pkg.rationale}
         {pkg.adjusted_target_value < pkg.sticker_value && (
           <span className="text-green-400">
-            {' '}(sticker {(pkg.sticker_value / 1000).toFixed(1)}k → adjusted{' '}
+            {' '}(sticker {(pkg.sticker_value / 1000).toFixed(1)}k → their price paid this way{' '}
             {(pkg.adjusted_target_value / 1000).toFixed(1)}k)
+          </span>
+        )}
+        {light && (
+          <span className="text-yellow-500">
+            {' '}— a touch light; be ready to add a small sweetener
           </span>
         )}
       </p>

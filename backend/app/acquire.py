@@ -274,18 +274,30 @@ def _price_discount(
     picks_are_cheap: bool,
     their_posture: str,
     player_age: float | None,
-    paying_with_picks: bool,
+    pick_share: float,
 ) -> tuple[float, list[str]]:
-    """Return (discount multiplier, reasons). 1.0 = pay full sticker."""
+    """
+    Return (discount multiplier, reasons). 1.0 = pay full sticker.
+
+    pick_share is the fraction of the offered package made up of picks
+    (0.0 = pure player swap, 1.0 = picks only). The "they misprice picks"
+    discount scales with it — a 2% throw-in pick shouldn't unlock the same
+    price cut as a picks-heavy package. Full effect at 50%+ picks.
+    """
     discount = 1.0
     reasons: list[str] = []
     if shed_bias is not None and shed_bias < -0.05:
         cut = min(0.15, abs(shed_bias))
         discount -= cut
         reasons.append(f"they've historically undersold this position ({round(shed_bias * 100)}% avg when shedding)")
-    if paying_with_picks and picks_are_cheap:
-        discount -= 0.10
-        reasons.append("picks they accept tend to bust, so they price draft capital cheap")
+    if picks_are_cheap and pick_share > 0:
+        cut = 0.10 * min(1.0, pick_share / 0.50)
+        if cut >= 0.02:
+            discount -= cut
+            reasons.append(
+                f"picks they accept tend to bust, so they price draft capital cheap "
+                f"(picks are {round(pick_share * 100)}% of this offer → -{round(cut * 100)}%)"
+            )
     if their_posture == "rebuild" and player_age is not None and player_age >= VETERAN_AGE:
         discount -= 0.05
         reasons.append("rebuilding managers move veterans at a discount")
@@ -316,17 +328,26 @@ def _build_packages(
     their_posture: str,
     they_need_picks: bool,
 ) -> list[dict]:
-    """Up to three package shapes for one target player."""
+    """
+    Up to three package shapes for one target player.
+
+    Each shape's price ("adjusted_target_value") is computed from the actual
+    package composition — the pick-mispricing discount scales with the pick
+    share of the offer, so a picks-heavy package can legitimately show a
+    lower effective price than a straight player swap for the same target.
+    """
     packages = []
     base = target_player["value"]
     if base <= 0:
         return []
 
-    def add(kind: str, items: list[dict], paying_with_picks: bool, note: str | None = None):
+    def price(pick_share: float) -> tuple[float, list[str]]:
         discount, reasons = _price_discount(
-            shed_bias, picks_are_cheap, their_posture, target_player.get("age"), paying_with_picks
+            shed_bias, picks_are_cheap, their_posture, target_player.get("age"), pick_share
         )
-        adjusted = round(base * discount)
+        return base * discount, reasons
+
+    def add(kind: str, items: list[dict], adjusted: float, reasons: list[str], note: str | None = None):
         total = sum(i["value"] for i in items)
         rationale_bits = list(reasons)
         if note:
@@ -339,7 +360,7 @@ def _build_packages(
             ],
             "package_value": total,
             "sticker_value": base,
-            "adjusted_target_value": adjusted,
+            "adjusted_target_value": round(adjusted),
             "rationale": (
                 " · ".join(rationale_bits)
                 if rationale_bits
@@ -348,34 +369,34 @@ def _build_packages(
         })
 
     # Shape 1 — picks only (strongest when they need picks or price them cheap)
-    discount_est, _ = _price_discount(shed_bias, picks_are_cheap, their_posture, target_player.get("age"), True)
-    adj = base * discount_est
+    adj, reasons = price(pick_share=1.0)
     combo = _pick_combo(my_picks, adj * 0.90, adj * 1.15)
     if combo:
         note = "they're short on draft capital" if they_need_picks else None
-        add("picks_only", combo, paying_with_picks=True, note=note)
+        add("picks_only", combo, adj, reasons, note=note)
 
-    # Shape 2 — one player + one pick
-    discount_est, _ = _price_discount(shed_bias, picks_are_cheap, their_posture, target_player.get("age"), True)
-    adj = base * discount_est
-    best_combo = None
+    # Shape 2 — one player + one pick. The discount depends on the pick's
+    # actual share of the package, so validate each candidate combo against
+    # the price it would earn.
+    found = None
     for pl in my_players[:6]:
-        if pl["value"] >= adj * 1.05:
-            continue
-        gap_lo, gap_hi = adj * 0.90 - pl["value"], adj * 1.15 - pl["value"]
-        fillers = [p for p in my_picks if gap_lo <= p["value"] <= gap_hi]
-        if pl["value"] >= adj * 0.90 * 0.55 and fillers:
-            best_combo = [pl, min(fillers, key=lambda f: f["value"])]
+        for filler in sorted(my_picks, key=lambda f: f["value"]):
+            total = pl["value"] + filler["value"]
+            share = filler["value"] / total
+            adj, reasons = price(pick_share=share)
+            if adj * 0.90 <= total <= adj * 1.15 and pl["value"] >= adj * 0.50:
+                found = ([pl, filler], adj, reasons)
+                break
+        if found:
             break
-    if best_combo:
-        add("player_plus_pick", best_combo, paying_with_picks=True)
+    if found:
+        add("player_plus_pick", *found)
 
     # Shape 3 — straight player swap from my surplus
-    discount_est, _ = _price_discount(shed_bias, picks_are_cheap, their_posture, target_player.get("age"), False)
-    adj = base * discount_est
+    adj, reasons = price(pick_share=0.0)
     swap = next((pl for pl in my_players if adj * 0.85 <= pl["value"] <= adj * 1.15), None)
     if swap:
-        add("player_swap", [swap], paying_with_picks=False,
+        add("player_swap", [swap], adj, reasons,
             note=f"moves your surplus {swap.get('position', '')} for your {target_player.get('name', 'target')} need".strip())
 
     return packages[:3]
