@@ -32,7 +32,15 @@ import logging
 from datetime import date
 from sqlite3 import Connection
 
-from app.pick_conversion import PickResolutionContext, compute_pick_conversion
+from app.pick_conversion import PickResolutionContext
+from app.pick_signals import (
+    compute_draft_skill,
+    compute_pick_appetite,
+    compute_pick_horizon,
+    concentrated_years,
+    draft_skill_note,
+    prefer_picks_for_target,
+)
 from app.profiles.engine import (
     _ensure_graded,
     _get_manager_trades,
@@ -271,18 +279,17 @@ def _my_offerable_players(
 
 def _price_discount(
     shed_bias: float | None,
-    picks_are_cheap: bool,
     their_posture: str,
     player_age: float | None,
-    pick_share: float,
 ) -> tuple[float, list[str]]:
     """
     Return (discount multiplier, reasons). 1.0 = pay full sticker.
 
-    pick_share is the fraction of the offered package made up of picks
-    (0.0 = pure player swap, 1.0 = picks only). The "they misprice picks"
-    discount scales with it — a 2% throw-in pick shouldn't unlock the same
-    price cut as a picks-heavy package. Full effect at 50%+ picks.
+    Only OBSERVED trade-ledger behavior moves the price: their history of
+    underselling this position, and the rebuilder-shedding-a-veteran nudge.
+    Counterparty draft skill never touches price — a pick is worth its
+    sticker in the deal ledger regardless of who's drafting with it; skill
+    is surfaced separately as a risk note.
     """
     discount = 1.0
     reasons: list[str] = []
@@ -290,18 +297,10 @@ def _price_discount(
         cut = min(0.15, abs(shed_bias))
         discount -= cut
         reasons.append(f"they've historically undersold this position ({round(shed_bias * 100)}% avg when shedding)")
-    if picks_are_cheap and pick_share > 0:
-        cut = 0.10 * min(1.0, pick_share / 0.50)
-        if cut >= 0.02:
-            discount -= cut
-            reasons.append(
-                f"picks they accept tend to bust, so they price draft capital cheap "
-                f"(picks are {round(pick_share * 100)}% of this offer → -{round(cut * 100)}%)"
-            )
     if their_posture == "rebuild" and player_age is not None and player_age >= VETERAN_AGE:
         discount -= 0.05
         reasons.append("rebuilding managers move veterans at a discount")
-    return max(0.70, discount), reasons
+    return max(0.75, discount), reasons
 
 
 def _pick_combo(picks: list[dict], lo: float, hi: float, max_picks: int = 3) -> list[dict] | None:
@@ -324,35 +323,33 @@ def _build_packages(
     my_picks: list[dict],
     my_players: list[dict],
     shed_bias: float | None,
-    picks_are_cheap: bool,
     their_posture: str,
     they_need_picks: bool,
+    appetite_share: float | None,
 ) -> list[dict]:
     """
-    Up to three package shapes for one target player.
+    Up to three package shapes for one target player, all priced against
+    the SAME adjusted value (payment mix never changes the price).
 
-    Each shape's price ("adjusted_target_value") is computed from the actual
-    package composition — the pick-mispricing discount scales with the pick
-    share of the offer, so a picks-heavy package can legitimately show a
-    lower effective price than a straight player swap for the same target.
+    Ordering is driven by their pick appetite: a manager who rarely takes
+    picks gets player-led shapes first, with the long-shot pick package
+    still shown but flagged.
     """
-    packages = []
     base = target_player["value"]
     if base <= 0:
         return []
 
-    def price(pick_share: float) -> tuple[float, list[str]]:
-        discount, reasons = _price_discount(
-            shed_bias, picks_are_cheap, their_posture, target_player.get("age"), pick_share
-        )
-        return base * discount, reasons
+    adj, reasons = _price_discount(shed_bias, their_posture, target_player.get("age"))
+    adj = base * adj
 
-    def add(kind: str, items: list[dict], adjusted: float, reasons: list[str], note: str | None = None):
+    low_appetite = appetite_share is not None and appetite_share < 0.20
+
+    def make(kind: str, items: list[dict], note: str | None = None) -> dict:
         total = sum(i["value"] for i in items)
         rationale_bits = list(reasons)
         if note:
             rationale_bits.insert(0, note)
-        packages.append({
+        return {
             "kind": kind,
             "items": [
                 {"label": i.get("label") or i.get("name"), "value": i["value"]}
@@ -360,46 +357,52 @@ def _build_packages(
             ],
             "package_value": total,
             "sticker_value": base,
-            "adjusted_target_value": round(adjusted),
+            "adjusted_target_value": round(adj),
             "rationale": (
                 " · ".join(rationale_bits)
                 if rationale_bits
                 else "straight value-for-value swap"
             ),
-        })
+        }
 
-    # Shape 1 — picks only (strongest when they need picks or price them cheap)
-    adj, reasons = price(pick_share=1.0)
+    picks_pkg = None
     combo = _pick_combo(my_picks, adj * 0.90, adj * 1.15)
     if combo:
-        note = "they're short on draft capital" if they_need_picks else None
-        add("picks_only", combo, adj, reasons, note=note)
+        if low_appetite:
+            note = (
+                f"long shot: they've received picks in only "
+                f"{round((appetite_share or 0) * 100)}% of their trades — lead with players"
+            )
+        elif they_need_picks:
+            note = "they're short on draft capital"
+        else:
+            note = None
+        picks_pkg = make("picks_only", combo, note=note)
 
-    # Shape 2 — one player + one pick. The discount depends on the pick's
-    # actual share of the package, so validate each candidate combo against
-    # the price it would earn.
-    found = None
+    mixed_pkg = None
     for pl in my_players[:6]:
-        for filler in sorted(my_picks, key=lambda f: f["value"]):
-            total = pl["value"] + filler["value"]
-            share = filler["value"] / total
-            adj, reasons = price(pick_share=share)
-            if adj * 0.90 <= total <= adj * 1.15 and pl["value"] >= adj * 0.50:
-                found = ([pl, filler], adj, reasons)
-                break
-        if found:
+        if pl["value"] >= adj * 1.05:
+            continue
+        gap_lo, gap_hi = adj * 0.90 - pl["value"], adj * 1.15 - pl["value"]
+        fillers = [p for p in my_picks if gap_lo <= p["value"] <= gap_hi]
+        if pl["value"] >= adj * 0.50 and fillers:
+            mixed_pkg = make("player_plus_pick", [pl, min(fillers, key=lambda f: f["value"])])
             break
-    if found:
-        add("player_plus_pick", *found)
 
-    # Shape 3 — straight player swap from my surplus
-    adj, reasons = price(pick_share=0.0)
+    swap_pkg = None
     swap = next((pl for pl in my_players if adj * 0.85 <= pl["value"] <= adj * 1.15), None)
     if swap:
-        add("player_swap", [swap], adj, reasons,
-            note=f"moves your surplus {swap.get('position', '')} for your {target_player.get('name', 'target')} need".strip())
+        swap_pkg = make(
+            "player_swap", [swap],
+            note=f"moves your surplus {swap.get('position', '')} for your {target_player.get('name', 'target')} need".strip(),
+        )
 
-    return packages[:3]
+    # Appetite decides the lead shape; price is identical across shapes.
+    if low_appetite:
+        ordered = [swap_pkg, mixed_pkg, picks_pkg]
+    else:
+        ordered = [picks_pkg, mixed_pkg, swap_pkg]
+    return [p for p in ordered if p is not None][:3]
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +468,7 @@ def acquisition_report(
 
     other_managers = conn.execute(
         """
-        SELECT DISTINCT lm.user_id, m.display_name, m.username
+        SELECT DISTINCT lm.user_id, lm.roster_id, m.display_name, m.username
         FROM league_managers lm
         LEFT JOIN managers m ON m.user_id = lm.user_id
         WHERE lm.league_id = ? AND lm.user_id != ?
@@ -493,15 +496,25 @@ def acquisition_report(
         shed_bias = shed.get("avg_differential")
         shed_count = shed.get("count", 0)
 
-        conv = compute_pick_conversion(conn, uid, league_id, ctx=pick_ctx)
-        acq_ratio = conv["acquired"]["median_return_ratio"]
-        picks_are_cheap = (
-            conv["acquired"]["resolved"] >= 3
-            and acq_ratio is not None
-            and acq_ratio < 0.8
-        )
+        # ── Pick receptivity: need / appetite / draft skill ────────────
         their_pick_score = pick_capital.get(uid, {}).get("pick_capital_score", 0.0)
         they_need_picks = their_pick_score < -0.07
+
+        appetite = compute_pick_appetite(conn, uid, family_ids)
+        appetite_share = appetite["share"]
+        horizon = compute_pick_horizon(conn, uid, family_ids)
+        skill = compute_draft_skill(conn, uid, pick_ctx)
+        skill_note = draft_skill_note(skill)
+
+        their_picks_inv = _my_pick_inventory(
+            conn, current_league_id, row["roster_id"], fmt, pick_ctx.last_drafted_season
+        )
+        conc_years = concentrated_years(their_picks_inv)
+        # My picks, reordered for THIS manager: their horizon first, years
+        # they already hoard last.
+        preferred_picks = prefer_picks_for_target(
+            my_picks, horizon, conc_years, pick_ctx.last_drafted_season
+        )
 
         # ── Scores ─────────────────────────────────────────────────────
         surplus_score = _clamp(surplus_pct / 0.40)
@@ -518,13 +531,18 @@ def acquisition_report(
             willingness = max(willingness, 0.55)  # even contenders sell surplus depth
         willingness_score = willingness
 
+        # Payment fit: do I hold currency they'll actually take? Pick-based
+        # payment needs both inventory on my side and either demonstrated
+        # appetite or a capital shortage on theirs. Draft skill is NOT a
+        # factor here — it's display-only risk framing.
         payment_score = 0.3
-        if picks_are_cheap and my_pick_value_total > 0:
-            payment_score = max(payment_score, 0.9)
-        if they_need_picks and my_pick_value_total > 0:
-            payment_score = max(payment_score, 0.8)
         if my_players:
             payment_score = max(payment_score, 0.5)
+        if my_pick_value_total > 0:
+            if they_need_picks and (appetite_share or 0) >= 0.20:
+                payment_score = max(payment_score, 0.95)
+            elif they_need_picks or (appetite_share or 0) >= 0.35:
+                payment_score = max(payment_score, 0.8)
 
         acquisition_score = round(
             surplus_score * W_SURPLUS
@@ -541,9 +559,9 @@ def acquisition_report(
         suggestions = []
         for p in [pl for pl in players if pl["likely_available"]][:2] or players[1:2]:
             pkgs = _build_packages(
-                p, my_picks, my_players,
+                p, preferred_picks, my_players,
                 shed_bias if shed_count >= 2 else None,
-                picks_are_cheap, their_posture, they_need_picks,
+                their_posture, they_need_picks, appetite_share,
             )
             if pkgs:
                 suggestions.append({"player": p, "packages": pkgs})
@@ -556,10 +574,11 @@ def acquisition_report(
             bits.append(f"thin at {position} ({round(surplus_pct * 100)}% vs avg)")
         if shed_bias is not None and shed_count >= 2 and shed_bias < -0.05:
             bits.append(f"undersold {position}s before ({round(shed_bias * 100)}% avg over {shed_count} trades)")
-        if conv["tendency"]:
-            bits.append(conv["tendency"])
-        elif they_need_picks:
-            bits.append("short on draft capital — picks talk")
+        # Appetite / need / draft skill live in pick_receptivity — the UI
+        # renders them as chips, so keep the prose summary to trade-ledger
+        # signals only.
+        if they_need_picks:
+            bits.append("short on draft capital")
         posture_word = {"rebuild": "Rebuilding", "contend": "Contending", "middling": "Middling"}[their_posture]
         summary = f"{posture_word}. " + (" ".join(s.rstrip('.') + "." for s in bits) if bits else "No strong signals — a fair-market negotiation.")
 
@@ -580,7 +599,16 @@ def acquisition_report(
             "shed_count": shed_count,
             "avg_decision_differential": (diff_stats or {}).get("avg_decision_differential"),
             "total_trades": (diff_stats or {}).get("total_trades", 0),
-            "pick_conversion": conv,
+            "pick_receptivity": {
+                "appetite_share": appetite_share,
+                "appetite_pick_trades": appetite["pick_trades"],
+                "appetite_total_trades": appetite["total_trades"],
+                "needs_picks": they_need_picks,
+                "preferred_horizon_years": horizon,
+                "concentrated_years": conc_years,
+                "draft_skill": skill,
+                "draft_skill_note": skill_note,
+            },
             "pick_capital_score": round(their_pick_score, 3),
             "players": players,
             "suggestions": suggestions,

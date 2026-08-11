@@ -211,6 +211,26 @@ export interface PickConversion {
   tendency: string | null
 }
 
+export interface DraftSkill {
+  n: number
+  median_ratio: number | null
+  label: 'sharp' | 'cold' | 'average' | null
+  seasons: number[]
+  best: { player: string; pick: string; ratio: number } | null
+  worst: { player: string; pick: string; ratio: number } | null
+}
+
+export interface PickReceptivity {
+  appetite_share: number | null
+  appetite_pick_trades: number
+  appetite_total_trades: number
+  needs_picks: boolean
+  preferred_horizon_years: number | null
+  concentrated_years: number[]
+  draft_skill: DraftSkill
+  draft_skill_note: string | null
+}
+
 export interface AcquireTarget {
   user_id: string
   manager_name: string
@@ -223,7 +243,7 @@ export interface AcquireTarget {
   shed_count: number
   avg_decision_differential: number | null
   total_trades: number
-  pick_conversion: PickConversion
+  pick_receptivity: PickReceptivity
   pick_capital_score: number
   players: AcquirePlayer[]
   suggestions: AcquireSuggestion[]

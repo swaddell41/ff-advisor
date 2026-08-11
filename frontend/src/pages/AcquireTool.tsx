@@ -104,6 +104,77 @@ function PackageCard({ pkg }: { pkg: DealPackage }) {
   )
 }
 
+function ReceptivityStrip({ target }: { target: AcquireTarget }) {
+  const r = target.pick_receptivity
+  if (!r) return null
+  const skill = r.draft_skill
+  const chips: { text: string; cls: string; title?: string }[] = []
+
+  if (r.appetite_share != null) {
+    const pct = Math.round(r.appetite_share * 100)
+    chips.push(
+      r.appetite_share >= 0.2
+        ? {
+            text: `takes pick deals (${pct}%)`,
+            cls: 'border-purple-300 bg-purple-100 text-purple-900 dark:border-purple-800 dark:bg-purple-950/30 dark:text-purple-300',
+            title: `Received picks in ${r.appetite_pick_trades} of ${r.appetite_total_trades} trades (recency-weighted ${pct}%)`,
+          }
+        : {
+            text: `players-only trader (${pct}%)`,
+            cls: 'border-border text-muted-foreground',
+            title: `Received picks in only ${r.appetite_pick_trades} of ${r.appetite_total_trades} trades — lead with players`,
+          }
+    )
+  }
+  if (r.needs_picks) {
+    chips.push({
+      text: 'needs picks',
+      cls: 'border-blue-300 bg-blue-100 text-blue-900 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300',
+      title: 'Below-average future draft capital',
+    })
+  }
+  if (skill.label) {
+    const skillTitle = [
+      skill.best && `Best: ${skill.best.pick} → ${skill.best.player} (${skill.best.ratio}x slot)`,
+      skill.worst && `Worst: ${skill.worst.pick} → ${skill.worst.player} (${skill.worst.ratio}x slot)`,
+      'Display-only — never affects pricing.',
+    ].filter(Boolean).join(' · ')
+    chips.push({
+      text:
+        skill.label === 'cold'
+          ? `cold drafter (${skill.median_ratio}x slot, n=${skill.n}) — low-regret pick target`
+          : skill.label === 'sharp'
+            ? `sharp drafter (${skill.median_ratio}x slot, n=${skill.n}) — picks arm a rival`
+            : `average drafter (${skill.median_ratio}x slot, n=${skill.n})`,
+      cls:
+        skill.label === 'cold'
+          ? 'border-green-300 bg-green-100 text-green-900 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300'
+          : skill.label === 'sharp'
+            ? 'border-red-300 bg-red-100 text-red-900 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300'
+            : 'border-border text-muted-foreground',
+      title: skillTitle,
+    })
+  } else if (skill.n > 0) {
+    chips.push({
+      text: `draft record thin (n=${skill.n})`,
+      cls: 'border-border text-muted-foreground',
+      title: 'Too few rookie-draft picks to judge skill yet — the sample grows every season.',
+    })
+  }
+
+  if (chips.length === 0) return null
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      <span className="text-xs text-muted-foreground">Picks:</span>
+      {chips.map((c, i) => (
+        <span key={i} title={c.title} className={cn('text-xs px-1.5 py-0.5 rounded border font-mono', c.cls)}>
+          {c.text}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function TargetCard({ target, leagueId }: { target: AcquireTarget; leagueId: string }) {
   const navigate = useNavigate()
   const [expanded, setExpanded] = useState(false)
@@ -130,6 +201,7 @@ function TargetCard({ target, leagueId }: { target: AcquireTarget; leagueId: str
             <span className="text-xs text-muted-foreground">{target.total_trades} trades</span>
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">{target.summary}</p>
+          <ReceptivityStrip target={target} />
         </div>
         <div className="shrink-0 text-right">
           <p className="text-xs text-muted-foreground mb-0.5">Fit</p>

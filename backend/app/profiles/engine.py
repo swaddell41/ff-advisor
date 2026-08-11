@@ -59,6 +59,23 @@ AGE_BUCKETS = [
     ("veteran", 27,   None), # ≥ 27
 ]
 
+# ── Recency weighting ───────────────────────────────────────────────────────
+# Bias averages weight recent seasons more — a manager who overpaid for RBs
+# in 2023 may have learned. Weight is relative to the most recent season in
+# the trade set being analysed. Counts and W/L records stay raw.
+SEASON_DECAY = {0: 1.0, 1: 0.75, 2: 0.5}
+SEASON_DECAY_FLOOR = 0.3
+
+
+def _season_weight(season: int | None, current: int) -> float:
+    if season is None:
+        return SEASON_DECAY_FLOOR
+    return SEASON_DECAY.get(current - season, SEASON_DECAY_FLOOR)
+
+
+def _current_season(trades: list[dict]) -> int:
+    return max((t.get("season") or 0) for t in trades) if trades else 0
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -116,16 +133,21 @@ def _avg(values: list[float]) -> float | None:
     return sum(values) / len(values)
 
 
-def _bias_dict(diffs: list[float]) -> dict:
-    """Summary stats for a list of differentials."""
-    if not diffs:
+def _bias_dict(pairs: list[tuple[float, float]]) -> dict:
+    """
+    Summary stats for a list of (differential, recency_weight) pairs.
+    The average is recency-weighted; counts and W/L records stay raw.
+    """
+    if not pairs:
         return {"count": 0, "avg_differential": None, "wins": 0, "losses": 0, "neutrals": 0}
-    wins = sum(1 for d in diffs if d > WIN_PCT_THRESHOLD)
-    losses = sum(1 for d in diffs if d < LOSS_PCT_THRESHOLD)
-    neutrals = len(diffs) - wins - losses
+    wins = sum(1 for d, _ in pairs if d > WIN_PCT_THRESHOLD)
+    losses = sum(1 for d, _ in pairs if d < LOSS_PCT_THRESHOLD)
+    neutrals = len(pairs) - wins - losses
+    wsum = sum(w for _, w in pairs)
+    wavg = sum(d * w for d, w in pairs) / wsum if wsum > 0 else None
     return {
-        "count": len(diffs),
-        "avg_differential": round(_avg(diffs), 4),
+        "count": len(pairs),
+        "avg_differential": round(wavg, 4) if wavg is not None else None,
         "wins": wins,
         "losses": losses,
         "neutrals": neutrals,
@@ -322,9 +344,17 @@ def compute_differential_stats(trades: list[dict]) -> dict:
         }
 
     graded = [t for t in trades if t["d_grade"] is not None]
+    current = _current_season(trades)
 
     d_pcts = [_pct(t["d_diff"], t["d_received"], t["d_given"]) for t in graded]
     o_pcts = [_pct(t["o_diff"], t["o_received"], t["o_given"]) for t in graded]
+    weights = [_season_weight(t.get("season"), current) for t in graded]
+
+    def _wavg(vals: list[float]) -> float | None:
+        wsum = sum(weights)
+        if not vals or wsum == 0:
+            return None
+        return sum(v * w for v, w in zip(vals, weights)) / wsum
 
     wins = sum(1 for p in d_pcts if p > WIN_PCT_THRESHOLD)
     losses = sum(1 for p in d_pcts if p < LOSS_PCT_THRESHOLD)
@@ -336,8 +366,8 @@ def compute_differential_stats(trades: list[dict]) -> dict:
     return {
         "total_trades": len(trades),
         "graded_trades": len(graded),
-        "avg_decision_differential": round(_avg(d_pcts), 4) if d_pcts else None,
-        "avg_outcome_differential": round(_avg(o_pcts), 4) if o_pcts else None,
+        "avg_decision_differential": round(_wavg(d_pcts), 4) if d_pcts else None,
+        "avg_outcome_differential": round(_wavg(o_pcts), 4) if o_pcts else None,
         "best_decision_trade": {
             "trade_id": best["trade_id"],
             "differential": best["d_diff"],
@@ -377,22 +407,24 @@ def compute_position_biases(trades: list[dict]) -> dict:
     """
     POSITIONS = ["QB", "RB", "WR", "TE"]
 
-    acquiring: dict[str, list[float]] = {p: [] for p in POSITIONS}
-    shedding: dict[str, list[float]] = {p: [] for p in POSITIONS}
+    acquiring: dict[str, list[tuple[float, float]]] = {p: [] for p in POSITIONS}
+    shedding: dict[str, list[tuple[float, float]]] = {p: [] for p in POSITIONS}
+    current = _current_season(trades)
 
     for t in trades:
         if t["d_grade"] is None:
             continue
         d_pct = _pct(t["d_diff"], t["d_received"], t["d_given"])
+        w = _season_weight(t.get("season"), current)
 
         received_positions = {a["position"] for a in t["assets_received"] if a["asset_type"] == "player" and a["position"]}
         given_positions = {a["position"] for a in t["assets_given"] if a["asset_type"] == "player" and a["position"]}
 
         for pos in POSITIONS:
             if pos in received_positions:
-                acquiring[pos].append(d_pct)
+                acquiring[pos].append((d_pct, w))
             if pos in given_positions:
-                shedding[pos].append(d_pct)
+                shedding[pos].append((d_pct, w))
 
     return {
         pos: {
@@ -418,13 +450,15 @@ def compute_age_biases(trades: list[dict]) -> dict:
     - age_biases["veteran"]["acquiring"]["avg_differential"] = -0.18
       → "Consistently overpays when buying veterans"
     """
-    acquiring: dict[str, list[float]] = {b[0]: [] for b in AGE_BUCKETS}
-    shedding: dict[str, list[float]] = {b[0]: [] for b in AGE_BUCKETS}
+    acquiring: dict[str, list[tuple[float, float]]] = {b[0]: [] for b in AGE_BUCKETS}
+    shedding: dict[str, list[tuple[float, float]]] = {b[0]: [] for b in AGE_BUCKETS}
+    current = _current_season(trades)
 
     for t in trades:
         if t["d_grade"] is None:
             continue
         d_pct = _pct(t["d_diff"], t["d_received"], t["d_given"])
+        w = _season_weight(t.get("season"), current)
         trade_date = _parse_date(t["executed_at"]) or date.today()
 
         received_buckets = set()
@@ -446,9 +480,9 @@ def compute_age_biases(trades: list[dict]) -> dict:
                 given_buckets.add(bucket)
 
         for bucket in received_buckets:
-            acquiring[bucket].append(d_pct)
+            acquiring[bucket].append((d_pct, w))
         for bucket in given_buckets:
-            shedding[bucket].append(d_pct)
+            shedding[bucket].append((d_pct, w))
 
     return {
         bucket: {
@@ -481,14 +515,16 @@ def compute_posture_patterns(trades: list[dict]) -> dict:
 
     "Stuck" pattern: high veteran acquisition differential AND poor overall win rate.
     """
-    rebuild_pcts: list[float] = []
-    contend_pcts: list[float] = []
-    neutral_pcts: list[float] = []
+    rebuild_pcts: list[tuple[float, float]] = []
+    contend_pcts: list[tuple[float, float]] = []
+    neutral_pcts: list[tuple[float, float]] = []
+    current = _current_season(trades)
 
     for t in trades:
         if t["d_grade"] is None:
             continue
         d_pct = _pct(t["d_diff"], t["d_received"], t["d_given"])
+        w = _season_weight(t.get("season"), current)
 
         # Classify by what the manager is receiving
         received_picks = [a for a in t["assets_received"] if a["asset_type"] == "pick"]
@@ -498,11 +534,11 @@ def compute_posture_patterns(trades: list[dict]) -> dict:
         has_players = len(received_players) > 0
 
         if has_picks and not has_players:
-            rebuild_pcts.append(d_pct)
+            rebuild_pcts.append((d_pct, w))
         elif has_players and not has_picks:
-            contend_pcts.append(d_pct)
+            contend_pcts.append((d_pct, w))
         else:
-            neutral_pcts.append(d_pct)
+            neutral_pcts.append((d_pct, w))
 
     graded = [t for t in trades if t["d_grade"] is not None]
     overall_win_rate = None
