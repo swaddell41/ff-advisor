@@ -446,12 +446,16 @@ const VERDICT_STYLES: Record<string, string> = {
   overpay: 'bg-red-100 text-red-900 border-red-300 dark:bg-red-950/40 dark:text-red-300 dark:border-red-800',
 }
 
-function BalanceMeter({ ratio, marketRatio }: { ratio: number | null; marketRatio?: number | null }) {
+// Map a give÷get ratio (0.6 → 1.4) onto 0 → 100%. Center (1.0) = even.
+const ratioPos = (r: number) => Math.max(2, Math.min(98, ((r - 0.6) / 0.8) * 100))
+
+function AcceptanceMeter({ ratio }: { ratio: number | null }) {
   if (ratio == null) return null
-  // Map ratio 0.6 → 1.4 onto 0 → 100%. Center (1.0) = fair.
-  const toPos = (r: number) => Math.max(2, Math.min(98, ((r - 0.6) / 0.8) * 100))
   return (
-    <div className="space-y-1">
+    <div className="space-y-0.5">
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+        Will they take it? <span className="normal-case font-normal">(our values + their trade history)</span>
+      </p>
       <div className="relative h-2 rounded-full overflow-hidden flex">
         <div className="bg-red-400/70" style={{ width: '31.25%' }} />
         <div className="bg-yellow-400/70" style={{ width: '12.5%' }} />
@@ -460,21 +464,66 @@ function BalanceMeter({ ratio, marketRatio }: { ratio: number | null; marketRati
         <div className="bg-red-400/70" style={{ width: '18.75%' }} />
         <div
           className="absolute top-[-2px] h-3 w-1 rounded bg-foreground shadow"
-          style={{ left: `${toPos(ratio)}%` }}
-          title={`Our model: your side ÷ their price = ${ratio}`}
+          style={{ left: `${ratioPos(ratio)}%` }}
+          title={`What you send (as they perceive it) ÷ what they'd demand = ${ratio}`}
         />
-        {marketRatio != null && (
-          <div
-            className="absolute top-[-2px] h-3 w-1 rounded border-2 border-foreground bg-background"
-            style={{ left: `${toPos(marketRatio)}%` }}
-            title={`Market (FantasyCalc): ${marketRatio}`}
-          />
-        )}
       </div>
       <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
-        <span>too light</span>
-        <span>fair{marketRatio != null ? ' (▮ ours · ▯ market)' : ''}</span>
-        <span>overpay</span>
+        <span>they reject</span>
+        <span>deal zone</span>
+        <span>they grab it</span>
+      </div>
+    </div>
+  )
+}
+
+function ValueLensMeter({
+  ours, market, experts,
+}: { ours: number | null; market?: number | null; experts?: number | null }) {
+  const lenses = [
+    { key: 'ours', label: 'ours', ratio: ours, glyph: 'bar' },
+    { key: 'market', label: 'market', ratio: market, glyph: 'circle' },
+    { key: 'experts', label: 'experts', ratio: experts, glyph: 'diamond' },
+  ].filter(l => l.ratio != null) as { key: string; label: string; ratio: number; glyph: string }[]
+  if (lenses.length === 0) return null
+
+  const marker = (glyph: string, extra = '') => cn(
+    'shadow',
+    glyph === 'bar' && 'h-3 w-1 rounded bg-foreground',
+    glyph === 'circle' && 'h-2.5 w-2.5 rounded-full bg-background border-2 border-foreground',
+    glyph === 'diamond' && 'h-2 w-2 rotate-45 bg-blue-500 border border-background',
+    extra,
+  )
+
+  return (
+    <div className="space-y-0.5">
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+        Is it a fair price? <span className="normal-case font-normal">(you give ÷ you get, by source)</span>
+      </p>
+      <div className="relative h-2 rounded-full overflow-hidden"
+        style={{ background: 'linear-gradient(to right, rgb(34 197 94 / 0.8), rgb(148 163 184 / 0.45) 46%, rgb(148 163 184 / 0.45) 54%, rgb(248 113 113 / 0.8))' }}
+      >
+        {lenses.map(l => (
+          <div
+            key={l.key}
+            className={cn('absolute', marker(l.glyph))}
+            style={{ left: `${ratioPos(l.ratio)}%`, top: l.glyph === 'bar' ? '-2px' : '-1px' }}
+            title={`${l.label}: you give ${l.ratio}× what you get`}
+          />
+        ))}
+      </div>
+      <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
+        <span>you win</span>
+        <span>even</span>
+        <span>you overpay</span>
+      </div>
+      <div className="flex items-center gap-3 text-[10px] text-muted-foreground font-mono pt-0.5">
+        {lenses.map(l => (
+          <span key={l.key} className="inline-flex items-center gap-1">
+            <span className={marker(l.glyph, 'inline-block shrink-0')} style={{ position: 'static' }} />
+            {l.label} {l.ratio}×
+          </span>
+        ))}
       </div>
     </div>
   )
@@ -484,7 +533,7 @@ function DealRow({
   item, ev, onRemove,
 }: {
   item: DealItem
-  ev?: { value: number; perceived_value?: number; adjusted_value?: number; market_value?: number | null; contested?: boolean; note: string | null }
+  ev?: { value: number; perceived_value?: number; adjusted_value?: number; market_value?: number | null; consensus_value?: number | null; contested?: boolean; note: string | null }
   onRemove: () => void
 }) {
   const shown = ev?.perceived_value ?? ev?.adjusted_value
@@ -495,7 +544,12 @@ function DealRow({
         {ev?.contested && (
           <span
             className="text-[10px] px-1 rounded border border-orange-400 bg-orange-100 text-orange-900 dark:border-orange-700 dark:bg-orange-950/40 dark:text-orange-300 font-mono shrink-0"
-            title={`Sources split: our model ${ev.value.toLocaleString()} vs market ${ev.market_value?.toLocaleString()} — this asset's value is contested; see 'makes sense if' below.`}
+            title={
+              `Sources split on this asset: our model ${ev.value.toLocaleString()}` +
+              (ev.market_value != null ? ` · market ${ev.market_value.toLocaleString()}` : '') +
+              (ev.consensus_value != null ? ` · experts ${ev.consensus_value.toLocaleString()}` : '') +
+              ` — see 'makes sense if' below.`
+            }
           >
             split
           </span>
@@ -529,7 +583,7 @@ function DealSideSection({
   title: string
   totalLine: string | null
   items: DealItem[]
-  evalSide?: { label: string; ref: AssetRef; value: number; perceived_value?: number; adjusted_value?: number; market_value?: number | null; contested?: boolean; note: string | null }[]
+  evalSide?: { label: string; ref: AssetRef; value: number; perceived_value?: number; adjusted_value?: number; market_value?: number | null; consensus_value?: number | null; contested?: boolean; note: string | null }[]
   onRemove: (i: number) => void
   addOptions: DealItem[]
   onAdd: (item: DealItem) => void
@@ -685,12 +739,22 @@ function DealBuilder({
             Add assets to both sides to get a verdict.
           </p>
         )}
+        <AcceptanceMeter ratio={evaluation?.ratio ?? null} />
+        <ValueLensMeter
+          ours={evaluation?.raw_ratio ?? null}
+          market={evaluation?.market_ratio}
+          experts={evaluation?.consensus_ratio}
+        />
         {evaluation?.market_verdict && (
           <p className="text-xs text-muted-foreground leading-snug" title="FantasyCalc — values derived from real completed trades across thousands of leagues, normalized to our scale.">
             {evaluation.market_verdict.text}
           </p>
         )}
-        <BalanceMeter ratio={evaluation?.ratio ?? null} marketRatio={evaluation?.market_ratio ?? null} />
+        {evaluation?.consensus_verdict && (
+          <p className="text-xs text-muted-foreground leading-snug" title="DynastyProcess — FantasyPros expert consensus rankings converted to values, normalized to our scale.">
+            {evaluation.consensus_verdict.text}
+          </p>
+        )}
       </div>
 
       {/* Sides */}

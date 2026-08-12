@@ -199,6 +199,7 @@ export interface DealSideAsset {
   perceived_value?: number
   adjusted_value?: number
   market_value?: number | null
+  consensus_value?: number | null
   contested?: boolean
   note: string | null
 }
@@ -212,11 +213,15 @@ export interface DealEvaluation {
     my_raw: number; my_perceived: number
     their_raw: number; their_adjusted: number
     my_market?: number; their_market?: number
+    my_consensus?: number; their_consensus?: number
   }
   ratio: number | null
+  raw_ratio?: number | null
   verdict: { label: string; text: string } | null
   market_ratio?: number | null
   market_verdict?: { label: string; text: string } | null
+  consensus_ratio?: number | null
+  consensus_verdict?: { label: string; text: string } | null
   beliefs?: string[]
   notes: string[]
   receptivity: {

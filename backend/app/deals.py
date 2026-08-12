@@ -249,6 +249,7 @@ def evaluate_deal(
     their_raw = 0
     their_adjusted = 0
     their_market = 0
+    their_consensus = 0
     for ref in their_asset_refs:
         a = _resolve_asset(conn, fmt, snap_date, pick_snap, ref)
         if a is None:
@@ -276,12 +277,14 @@ def evaluate_deal(
         their_raw += a["value"]
         their_adjusted += adjusted
         their_market += market if market is not None else a["value"]
+        their_consensus += consensus if consensus is not None else a["value"]
 
     # ── My side: what I'd send, valued through their eyes ──────────────
     my_side = []
     my_raw = 0
     my_perceived = 0
     my_market = 0
+    my_consensus = 0
     sending_picks_value = 0
     for ref in my_asset_refs:
         a = _resolve_asset(conn, fmt, snap_date, pick_snap, ref)
@@ -321,6 +324,7 @@ def evaluate_deal(
         my_raw += a["value"]
         my_perceived += perceived
         my_market += market if market is not None else a["value"]
+        my_consensus += consensus if consensus is not None else a["value"]
 
     # ── Composition warnings (display-only, never adjust numbers) ──────
     if sending_picks_value > 0 and appetite["share"] is not None and appetite["share"] < LOW_APPETITE:
@@ -361,23 +365,23 @@ def evaluate_deal(
                 "text": f"Heavy overpay ({round((ratio - 1) * 100)}% above their price) — pull something back.",
             }
 
-    # ── Market view (FantasyCalc — prices from real completed trades) ──
-    market_ratio = None
-    market_verdict = None
-    if their_market > 0 and my_side:
-        market_ratio = round(my_market / their_market, 3)
-        if market_ratio < 0.9:
-            market_verdict = {
-                "label": "market_win",
-                "text": f"Market view: you get {round((1 / market_ratio - 1) * 100)}% more than you give at real-trade prices.",
-            }
-        elif market_ratio <= 1.1:
-            market_verdict = {"label": "market_fair", "text": "Market view: even at real-trade prices."}
+    # ── Alternate-lens views: market (real trades) and expert consensus ─
+    def _lens_verdict(my_total: int, their_total: int, lens: str, source_phrase: str):
+        if their_total <= 0 or not my_side:
+            return None, None
+        r = round(my_total / their_total, 3)
+        if r < 0.9:
+            v = {"label": f"{lens}_win",
+                 "text": f"{lens.capitalize()} view: you get {round((1 / r - 1) * 100)}% more than you give at {source_phrase}."}
+        elif r <= 1.1:
+            v = {"label": f"{lens}_fair", "text": f"{lens.capitalize()} view: even at {source_phrase}."}
         else:
-            market_verdict = {
-                "label": "market_overpay",
-                "text": f"Market view: you give {round((market_ratio - 1) * 100)}% more than you get at real-trade prices.",
-            }
+            v = {"label": f"{lens}_overpay",
+                 "text": f"{lens.capitalize()} view: you give {round((r - 1) * 100)}% more than you get at {source_phrase}."}
+        return r, v
+
+    market_ratio, market_verdict = _lens_verdict(my_market, their_market, "market", "real-trade prices")
+    consensus_ratio, consensus_verdict = _lens_verdict(my_consensus, their_consensus, "experts", "expert-consensus values")
 
     # ── Belief framing: what you'd have to believe for this to be right ─
     beliefs: list[str] = []
@@ -441,11 +445,16 @@ def evaluate_deal(
             "their_adjusted": their_adjusted,
             "my_market": my_market,
             "their_market": their_market,
+            "my_consensus": my_consensus,
+            "their_consensus": their_consensus,
         },
         "ratio": ratio,
+        "raw_ratio": round(my_raw / their_raw, 3) if their_raw > 0 and my_side else None,
         "verdict": verdict,
         "market_ratio": market_ratio,
         "market_verdict": market_verdict,
+        "consensus_ratio": consensus_ratio,
+        "consensus_verdict": consensus_verdict,
         "beliefs": beliefs,
         "notes": notes,
         "receptivity": {
