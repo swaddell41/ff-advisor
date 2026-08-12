@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 
 from app.db import get_connection, init_schema
+from app.ingestion.dynastyprocess import write_dynastyprocess_snapshots
 from app.ingestion.fantasycalc import write_fantasycalc_snapshots
 from app.ingestion.rosteraudit import (
     RosterAuditClient,
@@ -113,6 +114,14 @@ def main() -> None:
         logger.info("FantasyCalc: %d player rows, %d pick rows", fc_players, fc_picks)
     except Exception as e:
         logger.warning("FantasyCalc snapshot failed (non-fatal): %s", e)
+
+    # Expert-consensus reference layer — DynastyProcess (FantasyPros ECR).
+    logger.info("Fetching DynastyProcess expert-consensus values…")
+    try:
+        dp_players = write_dynastyprocess_snapshots(conn, format_keys, today)
+        logger.info("DynastyProcess: %d player rows", dp_players)
+    except Exception as e:
+        logger.warning("DynastyProcess snapshot failed (non-fatal): %s", e)
 
     conn.close()
 

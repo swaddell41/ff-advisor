@@ -148,13 +148,34 @@ def _market_value(
     return None
 
 
-def _is_contested(ours: int, market: int | None) -> bool:
-    if market is None:
-        return False
-    hi = max(ours, market)
-    if hi < CONTESTED_MIN_VALUE:
-        return False
-    return abs(market - ours) / hi >= CONTESTED_SPREAD
+def _dp_snap_date(conn: Connection, fmt: str) -> str | None:
+    row = conn.execute(
+        "SELECT MAX(snapshot_date) as d FROM value_snapshots WHERE source='dynastyprocess' AND format=?",
+        (fmt,),
+    ).fetchone()
+    return row["d"] if row else None
+
+
+def _dp_value(conn: Connection, fmt: str, ref: dict, dp_snap: str | None) -> int | None:
+    """DynastyProcess expert-consensus value (players only — no pick values)."""
+    if ref.get("type") != "player" or not dp_snap:
+        return None
+    row = conn.execute(
+        "SELECT value FROM value_snapshots WHERE player_id=? AND source='dynastyprocess' "
+        "AND format=? AND snapshot_date=?",
+        (ref.get("player_id"), fmt, dp_snap),
+    ).fetchone()
+    return row["value"] if row else None
+
+
+def _is_contested(ours: int, others: list[int | None]) -> bool:
+    for other in others:
+        if other is None:
+            continue
+        hi = max(ours, other)
+        if hi >= CONTESTED_MIN_VALUE and abs(other - ours) / hi >= CONTESTED_SPREAD:
+            return True
+    return False
 
 
 def _nearest_pick_label(conn: Connection, fmt: str, value: int, pick_snap: str | None) -> str | None:
@@ -192,6 +213,7 @@ def evaluate_deal(
     snap_date = snap_row["d"] if snap_row else None
     pick_snap = _latest_pick_snap_date(conn, fmt)
     mkt_snap, mkt_pick_snap = _market_snap_dates(conn, fmt)
+    dp_snap = _dp_snap_date(conn, fmt)
 
     mrow = conn.execute(
         "SELECT display_name, username FROM managers WHERE user_id = ?", (counterparty_id,)
@@ -244,10 +266,12 @@ def evaluate_deal(
                 note = (note + "; " if note else "") + "rebuilder moving a veteran"
             adjusted = round(a["value"] * (1 - min(MAX_BIAS_ADJUST + 0.05, cut)))
         market = _market_value(conn, fmt, a["ref"], mkt_snap, mkt_pick_snap)
+        consensus = _dp_value(conn, fmt, a["ref"], dp_snap)
         their_side.append({
             **a, "adjusted_value": adjusted, "note": note,
             "market_value": market,
-            "contested": _is_contested(a["value"], market),
+            "consensus_value": consensus,
+            "contested": _is_contested(a["value"], [market, consensus]),
         })
         their_raw += a["value"]
         their_adjusted += adjusted
@@ -287,10 +311,12 @@ def evaluate_deal(
         else:
             sending_picks_value += a["value"]
         market = _market_value(conn, fmt, a["ref"], mkt_snap, mkt_pick_snap)
+        consensus = _dp_value(conn, fmt, a["ref"], dp_snap)
         my_side.append({
             **a, "perceived_value": perceived, "note": note,
             "market_value": market,
-            "contested": _is_contested(a["value"], market),
+            "consensus_value": consensus,
+            "contested": _is_contested(a["value"], [market, consensus]),
         })
         my_raw += a["value"]
         my_perceived += perceived
@@ -366,17 +392,21 @@ def evaluate_deal(
         disc = (a["adjusted_value"] / ours) if ours > 0 else 1.0
         needed = max(0, round((my_perceived - others_adj) / max(disc, 0.01)))
         pick_cmp = _nearest_pick_label(conn, fmt, needed, pick_snap)
+        consensus = a.get("consensus_value")
+        consensus_bit = f" and expert consensus says {consensus:,}" if consensus is not None else ""
         if market is not None and market > ours:
             line = (
                 f"This deal makes sense if you believe {a['label']} is worth at least "
                 f"{needed:,}{f' ({pick_cmp})' if pick_cmp else ''}. Our model prices them at {ours:,} "
                 f"— likely floor-pricing recent absence or production — while the trade market pays {market:,}"
-                + (", already above that bar." if market >= needed else ", still short of that bar.")
+                f"{consensus_bit}"
+                + (". The market is already above that bar." if market >= needed else ". Even the market is short of that bar.")
             )
         else:
             line = (
                 f"Careful: our model prices {a['label']} at {ours:,} but the market only pays "
-                f"{market:,} — the deal needs them to be worth {needed:,} to break even, and the market disagrees."
+                f"{market:,}{consensus_bit} — the deal needs them to be worth {needed:,} to break even, "
+                f"and the market disagrees."
             )
         beliefs.append(line)
     for a in my_side:

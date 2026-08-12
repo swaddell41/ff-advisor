@@ -482,6 +482,12 @@ export const api = {
   getManagerAssets: (leagueId: string, userId: string) =>
     apiFetch<MyAssetsResponse>(`/api/leagues/${leagueId}/managers/${userId}/assets`),
 
+  getFreshness: () =>
+    apiFetch<{ rosters_fetched_at: string | null; values_snapshot_date: string | null; market_snapshot_date: string | null }>('/api/freshness'),
+
+  refreshData: () =>
+    apiFetch<{ refreshed_leagues: number; new_trades: number; newly_graded: number; rosters_fetched_at: string | null }>('/api/refresh', { method: 'POST' }),
+
   evaluateDeal: (leagueId: string, body: { counterparty_user_id: string; my_assets: AssetRef[]; their_assets: AssetRef[] }) =>
     apiFetch<DealEvaluation>(`/api/leagues/${leagueId}/deals/evaluate`, {
       method: 'POST',

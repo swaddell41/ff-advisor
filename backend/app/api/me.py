@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from app.acquire import acquisition_report
 from app.db import get_connection
 from app.deals import evaluate_deal
+from app.refresh import data_freshness, refresh_current_leagues
 from app.sell import my_assets, sell_report
 from app.profiles.engine import (
     _get_manager_trades,
@@ -428,6 +429,30 @@ def get_acquisition_report(league_id: str, position: str):
             return acquisition_report(conn, uid, league_id, position)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Data freshness / refresh
+# ---------------------------------------------------------------------------
+
+@router.get("/api/freshness")
+def get_freshness():
+    conn = _conn()
+    try:
+        return data_freshness(conn)
+    finally:
+        conn.close()
+
+
+@router.post("/api/refresh")
+def post_refresh():
+    """Re-pull rosters, current-season trades, and traded picks; grade new trades."""
+    conn = _conn()
+    try:
+        summary = refresh_current_leagues(conn)
+        return {**summary, **data_freshness(conn)}
     finally:
         conn.close()
 

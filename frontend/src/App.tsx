@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react'
 import { Routes, Route, Link, Navigate, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
+import { api } from '@/lib/api'
 import MyDashboard from '@/pages/MyDashboard'
 import TradeHub from '@/pages/TradeHub'
 import LeaguePicker from '@/pages/LeaguePicker'
@@ -24,6 +26,56 @@ function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
   )
 }
 
+function ageLabel(iso: string | null): string {
+  if (!iso) return 'never'
+  const ms = Date.now() - new Date(iso.includes('T') ? iso : iso + 'T00:00:00Z').getTime()
+  const hours = ms / 3.6e6
+  if (hours < 1) return 'just now'
+  if (hours < 24) return `${Math.round(hours)}h ago`
+  return `${Math.round(hours / 24)}d ago`
+}
+
+function FreshnessChip() {
+  const [rostersAt, setRostersAt] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+
+  useEffect(() => {
+    api.getFreshness().then(f => setRostersAt(f.rosters_fetched_at)).catch(console.error)
+  }, [])
+
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    try {
+      const r = await api.refreshData()
+      setRostersAt(r.rosters_fetched_at)
+      // Reload so every view reflects the fresh rosters/trades.
+      window.location.reload()
+    } catch (e) {
+      console.error(e)
+      setRefreshing(false)
+    }
+  }
+
+  const stale = rostersAt != null && Date.now() - new Date(rostersAt).getTime() > 24 * 3.6e6
+  return (
+    <button
+      onClick={handleRefresh}
+      disabled={refreshing}
+      title="Re-pull rosters, this season's trades, and traded picks from Sleeper (grades any new trades). Values refresh separately via make snapshot."
+      className={cn(
+        'text-xs px-2 py-1 rounded border font-mono transition-colors',
+        refreshing
+          ? 'border-border text-muted-foreground animate-pulse'
+          : stale
+            ? 'border-yellow-400 bg-yellow-100 text-yellow-900 dark:border-yellow-800 dark:bg-yellow-950/40 dark:text-yellow-300 hover:border-ring'
+            : 'border-border text-muted-foreground hover:text-foreground hover:border-ring'
+      )}
+    >
+      {refreshing ? 'refreshing…' : `↻ rosters ${ageLabel(rostersAt)}`}
+    </button>
+  )
+}
+
 export default function App() {
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -38,17 +90,20 @@ export default function App() {
             <NavLink to="/leagues">Browse Leagues</NavLink>
           </nav>
         </div>
-        <span className="text-xs text-muted-foreground">
-          Values by{' '}
-          <a
-            href="https://rosteraudit.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-2 hover:text-foreground transition-colors"
-          >
-            RosterAudit.com
-          </a>
-        </span>
+        <div className="flex items-center gap-3">
+          <FreshnessChip />
+          <span className="text-xs text-muted-foreground">
+            Values by{' '}
+            <a
+              href="https://rosteraudit.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2 hover:text-foreground transition-colors"
+            >
+              RosterAudit.com
+            </a>
+          </span>
+        </div>
       </header>
 
       <main className="px-6 py-6 max-w-[1400px] mx-auto">
