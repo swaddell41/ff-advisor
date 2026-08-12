@@ -45,6 +45,10 @@ logger = logging.getLogger(__name__)
 
 # Their-side discount cap (matches acquire's package pricing).
 MAX_BIAS_ADJUST = 0.15
+# An asset is "contested" when the two value sources disagree by at least
+# this fraction of the larger value (and the stakes aren't trivial).
+CONTESTED_SPREAD = 0.40
+CONTESTED_MIN_VALUE = 250
 # My-side perceived-value bump caps (matches sell's premium model, so the
 # evaluator agrees with the asks the sell tool proposes).
 MAX_ACQ_BUMP = 0.25
@@ -110,6 +114,62 @@ def _resolve_asset(
     return None
 
 
+def _market_snap_dates(conn: Connection, fmt: str) -> tuple[str | None, str | None]:
+    p = conn.execute(
+        "SELECT MAX(snapshot_date) as d FROM value_snapshots WHERE source='fantasycalc' AND format=?",
+        (fmt,),
+    ).fetchone()
+    k = conn.execute(
+        "SELECT MAX(snapshot_date) as d FROM pick_value_snapshots WHERE source='fantasycalc' AND format=?",
+        (fmt,),
+    ).fetchone()
+    return (p["d"] if p else None), (k["d"] if k else None)
+
+
+def _market_value(
+    conn: Connection, fmt: str, ref: dict,
+    mkt_snap: str | None, mkt_pick_snap: str | None,
+) -> int | None:
+    """FantasyCalc value (normalized to our scale) for one asset ref."""
+    if ref.get("type") == "player" and mkt_snap:
+        row = conn.execute(
+            "SELECT value FROM value_snapshots WHERE player_id=? AND source='fantasycalc' "
+            "AND format=? AND snapshot_date=?",
+            (ref.get("player_id"), fmt, mkt_snap),
+        ).fetchone()
+        return row["value"] if row else None
+    if ref.get("type") == "pick" and mkt_pick_snap:
+        row = conn.execute(
+            "SELECT mid_value FROM pick_value_snapshots WHERE season=? AND round=? "
+            "AND source='fantasycalc' AND format=? AND snapshot_date=?",
+            (ref.get("season"), ref.get("round"), fmt, mkt_pick_snap),
+        ).fetchone()
+        return row["mid_value"] if row else None
+    return None
+
+
+def _is_contested(ours: int, market: int | None) -> bool:
+    if market is None:
+        return False
+    hi = max(ours, market)
+    if hi < CONTESTED_MIN_VALUE:
+        return False
+    return abs(market - ours) / hi >= CONTESTED_SPREAD
+
+
+def _nearest_pick_label(conn: Connection, fmt: str, value: int, pick_snap: str | None) -> str | None:
+    """Translate a value into 'roughly a 2027 R2' using our pick board."""
+    if pick_snap is None or value <= 0:
+        return None
+    row = conn.execute(
+        "SELECT season, round FROM pick_value_snapshots "
+        "WHERE source='rosteraudit' AND format=? AND snapshot_date=? "
+        "ORDER BY ABS(mid_value - ?) ASC LIMIT 1",
+        (fmt, pick_snap, value),
+    ).fetchone()
+    return f"roughly a {row['season']} R{row['round']}" if row else None
+
+
 def evaluate_deal(
     conn: Connection,
     my_user_id: str,
@@ -131,6 +191,7 @@ def evaluate_deal(
     ).fetchone()
     snap_date = snap_row["d"] if snap_row else None
     pick_snap = _latest_pick_snap_date(conn, fmt)
+    mkt_snap, mkt_pick_snap = _market_snap_dates(conn, fmt)
 
     mrow = conn.execute(
         "SELECT display_name, username FROM managers WHERE user_id = ?", (counterparty_id,)
@@ -165,6 +226,7 @@ def evaluate_deal(
     their_side = []
     their_raw = 0
     their_adjusted = 0
+    their_market = 0
     for ref in their_asset_refs:
         a = _resolve_asset(conn, fmt, snap_date, pick_snap, ref)
         if a is None:
@@ -181,14 +243,21 @@ def evaluate_deal(
                 cut += 0.05
                 note = (note + "; " if note else "") + "rebuilder moving a veteran"
             adjusted = round(a["value"] * (1 - min(MAX_BIAS_ADJUST + 0.05, cut)))
-        their_side.append({**a, "adjusted_value": adjusted, "note": note})
+        market = _market_value(conn, fmt, a["ref"], mkt_snap, mkt_pick_snap)
+        their_side.append({
+            **a, "adjusted_value": adjusted, "note": note,
+            "market_value": market,
+            "contested": _is_contested(a["value"], market),
+        })
         their_raw += a["value"]
         their_adjusted += adjusted
+        their_market += market if market is not None else a["value"]
 
     # ── My side: what I'd send, valued through their eyes ──────────────
     my_side = []
     my_raw = 0
     my_perceived = 0
+    my_market = 0
     sending_picks_value = 0
     for ref in my_asset_refs:
         a = _resolve_asset(conn, fmt, snap_date, pick_snap, ref)
@@ -217,9 +286,15 @@ def evaluate_deal(
                 note = " · ".join(note_bits) + f" — your {a['position']} counts extra here"
         else:
             sending_picks_value += a["value"]
-        my_side.append({**a, "perceived_value": perceived, "note": note})
+        market = _market_value(conn, fmt, a["ref"], mkt_snap, mkt_pick_snap)
+        my_side.append({
+            **a, "perceived_value": perceived, "note": note,
+            "market_value": market,
+            "contested": _is_contested(a["value"], market),
+        })
         my_raw += a["value"]
         my_perceived += perceived
+        my_market += market if market is not None else a["value"]
 
     # ── Composition warnings (display-only, never adjust numbers) ──────
     if sending_picks_value > 0 and appetite["share"] is not None and appetite["share"] < LOW_APPETITE:
@@ -260,6 +335,66 @@ def evaluate_deal(
                 "text": f"Heavy overpay ({round((ratio - 1) * 100)}% above their price) — pull something back.",
             }
 
+    # ── Market view (FantasyCalc — prices from real completed trades) ──
+    market_ratio = None
+    market_verdict = None
+    if their_market > 0 and my_side:
+        market_ratio = round(my_market / their_market, 3)
+        if market_ratio < 0.9:
+            market_verdict = {
+                "label": "market_win",
+                "text": f"Market view: you get {round((1 / market_ratio - 1) * 100)}% more than you give at real-trade prices.",
+            }
+        elif market_ratio <= 1.1:
+            market_verdict = {"label": "market_fair", "text": "Market view: even at real-trade prices."}
+        else:
+            market_verdict = {
+                "label": "market_overpay",
+                "text": f"Market view: you give {round((market_ratio - 1) * 100)}% more than you get at real-trade prices.",
+            }
+
+    # ── Belief framing: what you'd have to believe for this to be right ─
+    beliefs: list[str] = []
+    for a in their_side:
+        if not a["contested"]:
+            continue
+        ours = a["value"]
+        market = a["market_value"]
+        # Value this asset would need for the deal to be even by our numbers,
+        # holding everything else fixed (and its bias discount ratio).
+        others_adj = their_adjusted - a["adjusted_value"]
+        disc = (a["adjusted_value"] / ours) if ours > 0 else 1.0
+        needed = max(0, round((my_perceived - others_adj) / max(disc, 0.01)))
+        pick_cmp = _nearest_pick_label(conn, fmt, needed, pick_snap)
+        if market is not None and market > ours:
+            line = (
+                f"This deal makes sense if you believe {a['label']} is worth at least "
+                f"{needed:,}{f' ({pick_cmp})' if pick_cmp else ''}. Our model prices them at {ours:,} "
+                f"— likely floor-pricing recent absence or production — while the trade market pays {market:,}"
+                + (", already above that bar." if market >= needed else ", still short of that bar.")
+            )
+        else:
+            line = (
+                f"Careful: our model prices {a['label']} at {ours:,} but the market only pays "
+                f"{market:,} — the deal needs them to be worth {needed:,} to break even, and the market disagrees."
+            )
+        beliefs.append(line)
+    for a in my_side:
+        if not a["contested"]:
+            continue
+        ours = a["value"]
+        market = a["market_value"]
+        if market is not None and market < ours:
+            beliefs.append(
+                f"Your cost may be lower than our verdict implies: our model prices {a['label']} at {ours:,} "
+                f"but the market pays only {market:,} — if you side with the market, you're giving up less."
+            )
+        elif market is not None and market > ours:
+            beliefs.append(
+                f"Careful what you're giving: the market pays {market:,} for {a['label']} vs our {ours:,} — "
+                f"you may be sending more real value than our verdict shows."
+            )
+
     return {
         "league_id": league_id,
         "counterparty": {
@@ -274,9 +409,14 @@ def evaluate_deal(
             "my_perceived": my_perceived,
             "their_raw": their_raw,
             "their_adjusted": their_adjusted,
+            "my_market": my_market,
+            "their_market": their_market,
         },
         "ratio": ratio,
         "verdict": verdict,
+        "market_ratio": market_ratio,
+        "market_verdict": market_verdict,
+        "beliefs": beliefs,
         "notes": notes,
         "receptivity": {
             "appetite_share": appetite["share"],

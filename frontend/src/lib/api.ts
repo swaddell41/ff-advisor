@@ -198,6 +198,8 @@ export interface DealSideAsset {
   ref: AssetRef
   perceived_value?: number
   adjusted_value?: number
+  market_value?: number | null
+  contested?: boolean
   note: string | null
 }
 
@@ -206,9 +208,16 @@ export interface DealEvaluation {
   counterparty: { user_id: string; name: string; posture: string }
   my_side: DealSideAsset[]
   their_side: DealSideAsset[]
-  totals: { my_raw: number; my_perceived: number; their_raw: number; their_adjusted: number }
+  totals: {
+    my_raw: number; my_perceived: number
+    their_raw: number; their_adjusted: number
+    my_market?: number; their_market?: number
+  }
   ratio: number | null
   verdict: { label: string; text: string } | null
+  market_ratio?: number | null
+  market_verdict?: { label: string; text: string } | null
+  beliefs?: string[]
   notes: string[]
   receptivity: {
     appetite_share: number | null

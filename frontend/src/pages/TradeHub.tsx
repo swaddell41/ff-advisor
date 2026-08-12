@@ -446,10 +446,10 @@ const VERDICT_STYLES: Record<string, string> = {
   overpay: 'bg-red-100 text-red-900 border-red-300 dark:bg-red-950/40 dark:text-red-300 dark:border-red-800',
 }
 
-function BalanceMeter({ ratio }: { ratio: number | null }) {
+function BalanceMeter({ ratio, marketRatio }: { ratio: number | null; marketRatio?: number | null }) {
   if (ratio == null) return null
   // Map ratio 0.6 → 1.4 onto 0 → 100%. Center (1.0) = fair.
-  const pos = Math.max(2, Math.min(98, ((ratio - 0.6) / 0.8) * 100))
+  const toPos = (r: number) => Math.max(2, Math.min(98, ((r - 0.6) / 0.8) * 100))
   return (
     <div className="space-y-1">
       <div className="relative h-2 rounded-full overflow-hidden flex">
@@ -460,13 +460,20 @@ function BalanceMeter({ ratio }: { ratio: number | null }) {
         <div className="bg-red-400/70" style={{ width: '18.75%' }} />
         <div
           className="absolute top-[-2px] h-3 w-1 rounded bg-foreground shadow"
-          style={{ left: `${pos}%` }}
-          title={`Your side ÷ their price = ${ratio}`}
+          style={{ left: `${toPos(ratio)}%` }}
+          title={`Our model: your side ÷ their price = ${ratio}`}
         />
+        {marketRatio != null && (
+          <div
+            className="absolute top-[-2px] h-3 w-1 rounded border-2 border-foreground bg-background"
+            style={{ left: `${toPos(marketRatio)}%` }}
+            title={`Market (FantasyCalc): ${marketRatio}`}
+          />
+        )}
       </div>
       <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
         <span>too light</span>
-        <span>fair</span>
+        <span>fair{marketRatio != null ? ' (▮ ours · ▯ market)' : ''}</span>
         <span>overpay</span>
       </div>
     </div>
@@ -477,7 +484,7 @@ function DealRow({
   item, ev, onRemove,
 }: {
   item: DealItem
-  ev?: { value: number; perceived_value?: number; adjusted_value?: number; note: string | null }
+  ev?: { value: number; perceived_value?: number; adjusted_value?: number; market_value?: number | null; contested?: boolean; note: string | null }
   onRemove: () => void
 }) {
   const shown = ev?.perceived_value ?? ev?.adjusted_value
@@ -485,6 +492,14 @@ function DealRow({
     <div className="group rounded-md hover:bg-muted/40 px-1.5 -mx-1.5">
       <div className="flex items-center gap-2 py-1">
         <span className="text-xs font-mono flex-1 min-w-0 truncate" title={item.label}>{item.label}</span>
+        {ev?.contested && (
+          <span
+            className="text-[10px] px-1 rounded border border-orange-400 bg-orange-100 text-orange-900 dark:border-orange-700 dark:bg-orange-950/40 dark:text-orange-300 font-mono shrink-0"
+            title={`Sources split: our model ${ev.value.toLocaleString()} vs market ${ev.market_value?.toLocaleString()} — this asset's value is contested; see 'makes sense if' below.`}
+          >
+            split
+          </span>
+        )}
         <span className="text-xs font-mono text-muted-foreground shrink-0">{kv(item.value)}</span>
         {shown != null && shown !== item.value && (
           <span
@@ -514,7 +529,7 @@ function DealSideSection({
   title: string
   totalLine: string | null
   items: DealItem[]
-  evalSide?: { label: string; value: number; perceived_value?: number; adjusted_value?: number; note: string | null }[]
+  evalSide?: { label: string; ref: AssetRef; value: number; perceived_value?: number; adjusted_value?: number; market_value?: number | null; contested?: boolean; note: string | null }[]
   onRemove: (i: number) => void
   addOptions: DealItem[]
   onAdd: (item: DealItem) => void
@@ -546,7 +561,7 @@ function DealSideSection({
               <DealRow
                 key={`${refKey(item.ref)}-${i}`}
                 item={item}
-                ev={evalSide?.find(e => e.label === item.label)}
+                ev={evalSide?.find(e => refKey(e.ref) === refKey(item.ref))}
                 onRemove={() => onRemove(i)}
               />
             ))}
@@ -670,7 +685,12 @@ function DealBuilder({
             Add assets to both sides to get a verdict.
           </p>
         )}
-        <BalanceMeter ratio={evaluation?.ratio ?? null} />
+        {evaluation?.market_verdict && (
+          <p className="text-xs text-muted-foreground leading-snug" title="FantasyCalc — values derived from real completed trades across thousands of leagues, normalized to our scale.">
+            {evaluation.market_verdict.text}
+          </p>
+        )}
+        <BalanceMeter ratio={evaluation?.ratio ?? null} marketRatio={evaluation?.market_ratio ?? null} />
       </div>
 
       {/* Sides */}
@@ -695,6 +715,17 @@ function DealBuilder({
           onAdd={onAddTheirs}
           emptyHint="Click a player on their card, or + add"
         />
+
+        {evaluation && (evaluation.beliefs?.length ?? 0) > 0 && (
+          <div className="rounded-lg border border-orange-300/60 bg-orange-50/60 dark:border-orange-900/60 dark:bg-orange-950/20 px-2.5 py-2 space-y-1.5">
+            <p className="text-xs font-semibold text-orange-800 dark:text-orange-300">
+              Makes sense if you think…
+            </p>
+            {evaluation.beliefs!.map((b, i) => (
+              <p key={i} className="text-xs text-muted-foreground leading-relaxed">{b}</p>
+            ))}
+          </div>
+        )}
 
         {evaluation && evaluation.notes.length > 0 && (
           <div className="rounded-lg border border-border/60 bg-muted/30 px-2.5 py-2 space-y-1">

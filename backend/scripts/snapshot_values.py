@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 
 from app.db import get_connection, init_schema
+from app.ingestion.fantasycalc import write_fantasycalc_snapshots
 from app.ingestion.rosteraudit import (
     RosterAuditClient,
     write_pick_snapshots,
@@ -103,6 +104,15 @@ def main() -> None:
         logger.info(
             "format_key=%s: wrote %d pick snapshot rows", format_key, n_picks
         )
+
+    # Market reference layer — FantasyCalc, normalized onto RosterAudit's
+    # scale. Runs after RA so the normalization has same-day RA rows.
+    logger.info("Fetching FantasyCalc market values…")
+    try:
+        fc_players, fc_picks = write_fantasycalc_snapshots(conn, format_keys, today)
+        logger.info("FantasyCalc: %d player rows, %d pick rows", fc_players, fc_picks)
+    except Exception as e:
+        logger.warning("FantasyCalc snapshot failed (non-fatal): %s", e)
 
     conn.close()
 
