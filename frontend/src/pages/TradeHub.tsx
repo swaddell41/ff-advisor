@@ -446,58 +446,142 @@ const VERDICT_STYLES: Record<string, string> = {
   overpay: 'bg-red-100 text-red-900 border-red-300 dark:bg-red-950/40 dark:text-red-300 dark:border-red-800',
 }
 
-function DealSideColumn({
-  title, items, evalSide, onRemove, addOptions, onAdd,
+function BalanceMeter({ ratio }: { ratio: number | null }) {
+  if (ratio == null) return null
+  // Map ratio 0.6 → 1.4 onto 0 → 100%. Center (1.0) = fair.
+  const pos = Math.max(2, Math.min(98, ((ratio - 0.6) / 0.8) * 100))
+  return (
+    <div className="space-y-1">
+      <div className="relative h-2 rounded-full overflow-hidden flex">
+        <div className="bg-red-400/70" style={{ width: '31.25%' }} />
+        <div className="bg-yellow-400/70" style={{ width: '12.5%' }} />
+        <div className="bg-green-500/80" style={{ width: '18.75%' }} />
+        <div className="bg-yellow-400/70" style={{ width: '18.75%' }} />
+        <div className="bg-red-400/70" style={{ width: '18.75%' }} />
+        <div
+          className="absolute top-[-2px] h-3 w-1 rounded bg-foreground shadow"
+          style={{ left: `${pos}%` }}
+          title={`Your side ÷ their price = ${ratio}`}
+        />
+      </div>
+      <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
+        <span>too light</span>
+        <span>fair</span>
+        <span>overpay</span>
+      </div>
+    </div>
+  )
+}
+
+function DealRow({
+  item, ev, onRemove,
+}: {
+  item: DealItem
+  ev?: { value: number; perceived_value?: number; adjusted_value?: number; note: string | null }
+  onRemove: () => void
+}) {
+  const shown = ev?.perceived_value ?? ev?.adjusted_value
+  return (
+    <div className="group rounded-md hover:bg-muted/40 px-1.5 -mx-1.5">
+      <div className="flex items-center gap-2 py-1">
+        <span className="text-xs font-mono flex-1 min-w-0 truncate" title={item.label}>{item.label}</span>
+        <span className="text-xs font-mono text-muted-foreground shrink-0">{kv(item.value)}</span>
+        {shown != null && shown !== item.value && (
+          <span
+            className={cn('text-xs font-mono font-semibold shrink-0', shown > item.value ? 'text-green-400' : 'text-yellow-500')}
+            title={ev?.note ?? "Value through the counterparty's eyes"}
+          >
+            →{kv(shown)}
+          </span>
+        )}
+        <button
+          onClick={onRemove}
+          className="text-muted-foreground hover:text-red-400 shrink-0 opacity-40 group-hover:opacity-100 transition-opacity"
+        >
+          ×
+        </button>
+      </div>
+      {ev?.note && (
+        <p className="text-[10px] text-muted-foreground leading-snug pb-1 pl-0.5">{ev.note}</p>
+      )}
+    </div>
+  )
+}
+
+function DealSideSection({
+  title, totalLine, items, evalSide, onRemove, addOptions, onAdd, emptyHint,
 }: {
   title: string
+  totalLine: string | null
   items: DealItem[]
   evalSide?: { label: string; value: number; perceived_value?: number; adjusted_value?: number; note: string | null }[]
   onRemove: (i: number) => void
   addOptions: DealItem[]
   onAdd: (item: DealItem) => void
+  emptyHint: string
 }) {
   const [showAdd, setShowAdd] = useState(false)
+  const [filter, setFilter] = useState('')
   const inDeal = new Set(items.map(i => refKey(i.ref)))
+  const options = addOptions
+    .filter(o => o.ref.type === 'pick' || !inDeal.has(refKey(o.ref)))
+    .filter(o => !filter || o.label.toLowerCase().includes(filter.toLowerCase()))
   return (
-    <div className="flex-1 min-w-0 space-y-1.5">
-      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{title}</p>
-      <div className="flex items-center gap-1.5 flex-wrap">
-        {items.map((item, i) => {
-          const ev = evalSide?.find(e => e.label === item.label)
-          const shown = ev?.perceived_value ?? ev?.adjusted_value
-          return (
-            <span key={`${refKey(item.ref)}-${i}`}
-              className="text-xs px-2 py-1 rounded-md border border-border font-mono inline-flex items-center gap-1.5"
-              title={ev?.note ?? undefined}
-            >
-              {item.label}
-              <span className="text-muted-foreground">{kv(item.value)}</span>
-              {shown != null && shown !== item.value && (
-                <span className={cn('font-semibold', shown > item.value ? 'text-green-400' : 'text-yellow-500')}
-                  title={ev?.note ?? "Value through the counterparty's eyes"}>
-                  →{kv(shown)}
-                </span>
-              )}
-              <button onClick={() => onRemove(i)} className="text-muted-foreground hover:text-red-400">×</button>
-            </span>
-          )
-        })}
-        {items.length === 0 && <span className="text-xs text-muted-foreground italic">empty</span>}
-        <button onClick={() => setShowAdd(s => !s)} className="text-xs text-primary hover:underline">
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wide">{title}</p>
+        <button
+          onClick={() => { setShowAdd(s => !s); setFilter('') }}
+          className="text-xs text-primary hover:underline"
+        >
           {showAdd ? '− done' : '+ add'}
         </button>
       </div>
+      <div className="rounded-lg border border-border/70 bg-background/40 px-2 py-1">
+        {items.length === 0 ? (
+          <p className="text-xs text-muted-foreground italic py-1.5">{emptyHint}</p>
+        ) : (
+          <>
+            {items.map((item, i) => (
+              <DealRow
+                key={`${refKey(item.ref)}-${i}`}
+                item={item}
+                ev={evalSide?.find(e => e.label === item.label)}
+                onRemove={() => onRemove(i)}
+              />
+            ))}
+            {totalLine && (
+              <div className="flex items-center justify-between border-t border-border/60 mt-0.5 pt-1 pb-0.5">
+                <span className="text-xs text-muted-foreground">total</span>
+                <span className="text-xs font-mono font-semibold">{totalLine}</span>
+              </div>
+            )}
+          </>
+        )}
+      </div>
       {showAdd && (
-        <div className="flex items-center gap-1 flex-wrap max-h-24 overflow-y-auto rounded border border-border/50 p-1.5">
-          {addOptions
-            .filter(o => o.ref.type === 'pick' || !inDeal.has(refKey(o.ref)))
-            .map((o, i) => (
-              <button key={`${refKey(o.ref)}-${i}`} onClick={() => onAdd(o)}
-                className="text-xs px-1.5 py-0.5 rounded border border-border font-mono text-muted-foreground hover:text-foreground hover:border-ring">
-                {o.label} {kv(o.value)}
+        <div className="space-y-1">
+          <input
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+            placeholder="filter…"
+            className="w-full text-xs px-2 py-1 rounded border border-border bg-background outline-none focus:border-ring"
+          />
+          <div className="max-h-40 overflow-y-auto rounded border border-border/50 divide-y divide-border/40">
+            {options.map((o, i) => (
+              <button
+                key={`${refKey(o.ref)}-${i}`}
+                onClick={() => onAdd(o)}
+                className="w-full flex items-center justify-between gap-2 px-2 py-1 text-left hover:bg-muted/50"
+              >
+                <span className="text-xs font-mono truncate">{o.label}</span>
+                <span className="text-xs font-mono text-muted-foreground shrink-0">{kv(o.value)}</span>
               </button>
             ))}
-          {addOptions.length === 0 && <span className="text-xs text-muted-foreground italic">nothing to add</span>}
+            {options.length === 0 && (
+              <p className="text-xs text-muted-foreground italic px-2 py-1.5">nothing to add</p>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -554,53 +638,73 @@ function DealBuilder({
 
   const t = evaluation?.totals
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-background/95 backdrop-blur px-6 py-3">
-      <div className="max-w-[1400px] mx-auto space-y-2">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <p className="text-sm font-semibold">
-            Working deal with {counterparty.name}
+    <aside
+      className={cn(
+        // Desktop: full-height right panel. Mobile: bottom sheet.
+        'fixed z-40 border-border bg-background/95 backdrop-blur flex flex-col',
+        'lg:inset-y-0 lg:right-0 lg:w-[380px] lg:border-l',
+        'max-lg:inset-x-0 max-lg:bottom-0 max-lg:max-h-[65vh] max-lg:border-t'
+      )}
+    >
+      {/* Header */}
+      <div className="px-4 py-3 border-b border-border/70 space-y-2 shrink-0">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm font-semibold truncate">
+            Deal with {counterparty.name}
             {evaluation?.counterparty.posture && (
               <span className={cn('text-xs font-medium ml-2', POSTURE_COLORS[evaluation.counterparty.posture])}>
                 {POSTURE_LABELS[evaluation.counterparty.posture]}
               </span>
             )}
           </p>
-          <div className="flex items-center gap-3">
-            {evaluation?.verdict && (
-              <span className={cn('text-xs px-2 py-1 rounded border font-medium', VERDICT_STYLES[evaluation.verdict.label])}>
-                {evaluation.verdict.text}
-              </span>
-            )}
-            <button onClick={onClear} className="text-xs text-muted-foreground hover:text-red-400">✕ clear deal</button>
+          <button onClick={onClear} className="text-xs text-muted-foreground hover:text-red-400 shrink-0">
+            ✕ clear
+          </button>
+        </div>
+        {evaluation?.verdict ? (
+          <div className={cn('text-xs px-2.5 py-1.5 rounded-md border font-medium leading-snug', VERDICT_STYLES[evaluation.verdict.label])}>
+            {evaluation.verdict.text}
           </div>
-        </div>
-
-        <div className="flex gap-6 flex-wrap sm:flex-nowrap">
-          <DealSideColumn
-            title={`You send${t ? ` · ${kv(t.my_raw)}${t.my_perceived !== t.my_raw ? ` (worth ${kv(t.my_perceived)} to them)` : ''}` : ''}`}
-            items={mySide}
-            evalSide={evaluation?.my_side}
-            onRemove={onRemoveMine}
-            addOptions={myOptions}
-            onAdd={onAddMine}
-          />
-          <DealSideColumn
-            title={`You get${t ? ` · ${kv(t.their_raw)}${t.their_adjusted !== t.their_raw ? ` (their price ${kv(t.their_adjusted)})` : ''}` : ''}`}
-            items={theirSide}
-            evalSide={evaluation?.their_side}
-            onRemove={onRemoveTheirs}
-            addOptions={theirOptions}
-            onAdd={onAddTheirs}
-          />
-        </div>
-
-        {evaluation && evaluation.notes.length > 0 && (
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            {evaluation.notes.join(' ')}
+        ) : (
+          <p className="text-xs text-muted-foreground italic">
+            Add assets to both sides to get a verdict.
           </p>
         )}
+        <BalanceMeter ratio={evaluation?.ratio ?? null} />
       </div>
-    </div>
+
+      {/* Sides */}
+      <div className="px-4 py-3 space-y-4 overflow-y-auto flex-1">
+        <DealSideSection
+          title="You send"
+          totalLine={t ? `${kv(t.my_raw)}${t.my_perceived !== t.my_raw ? ` (worth ${kv(t.my_perceived)} to them)` : ''}` : null}
+          items={mySide}
+          evalSide={evaluation?.my_side}
+          onRemove={onRemoveMine}
+          addOptions={myOptions}
+          onAdd={onAddMine}
+          emptyHint="Click your war-chest assets, or + add"
+        />
+        <DealSideSection
+          title={`You get from ${counterparty.name}`}
+          totalLine={t ? `${kv(t.their_raw)}${t.their_adjusted !== t.their_raw ? ` (their price ${kv(t.their_adjusted)})` : ''}` : null}
+          items={theirSide}
+          evalSide={evaluation?.their_side}
+          onRemove={onRemoveTheirs}
+          addOptions={theirOptions}
+          onAdd={onAddTheirs}
+          emptyHint="Click a player on their card, or + add"
+        />
+
+        {evaluation && evaluation.notes.length > 0 && (
+          <div className="rounded-lg border border-border/60 bg-muted/30 px-2.5 py-2 space-y-1">
+            {evaluation.notes.map((n, i) => (
+              <p key={i} className="text-xs text-muted-foreground leading-relaxed">{n}</p>
+            ))}
+          </div>
+        )}
+      </div>
+    </aside>
   )
 }
 
@@ -749,7 +853,7 @@ export default function TradeHub() {
   const byPosition = (pos: string): AcquirePlayer[] => (myAssets?.players ?? []).filter(p => p.position === pos)
 
   return (
-    <div className={cn('space-y-4', counterparty && 'pb-48')}>
+    <div className={cn('space-y-4', counterparty && 'lg:pr-[396px] max-lg:pb-80')}>
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Trade Hub</h1>
