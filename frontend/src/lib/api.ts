@@ -174,9 +174,49 @@ export interface PickInventoryItem {
   via: 'own' | 'acquired'
 }
 
+export interface AssetRef {
+  type: 'player' | 'pick'
+  player_id?: string
+  season?: number
+  round?: number
+}
+
 export interface DealPackageItem {
   label: string
   value: number
+  ref?: AssetRef
+}
+
+// ── Deal builder types ──────────────────────────────────────────────────────
+
+export interface DealSideAsset {
+  type: 'player' | 'pick'
+  label: string
+  position: string | null
+  age: number | null
+  value: number
+  ref: AssetRef
+  perceived_value?: number
+  adjusted_value?: number
+  note: string | null
+}
+
+export interface DealEvaluation {
+  league_id: string
+  counterparty: { user_id: string; name: string; posture: string }
+  my_side: DealSideAsset[]
+  their_side: DealSideAsset[]
+  totals: { my_raw: number; my_perceived: number; their_raw: number; their_adjusted: number }
+  ratio: number | null
+  verdict: { label: string; text: string } | null
+  notes: string[]
+  receptivity: {
+    appetite_share: number | null
+    appetite_pick_trades: number
+    appetite_total_trades: number
+    draft_skill: DraftSkill
+    draft_skill_note: string | null
+  }
 }
 
 export interface DealPackage {
@@ -429,6 +469,16 @@ export const api = {
 
   getSellPick: (leagueId: string, season: number, round: number) =>
     apiFetch<SellResponse>(`/api/leagues/${leagueId}/sell/pick/${season}/${round}`),
+
+  getManagerAssets: (leagueId: string, userId: string) =>
+    apiFetch<MyAssetsResponse>(`/api/leagues/${leagueId}/managers/${userId}/assets`),
+
+  evaluateDeal: (leagueId: string, body: { counterparty_user_id: string; my_assets: AssetRef[]; their_assets: AssetRef[] }) =>
+    apiFetch<DealEvaluation>(`/api/leagues/${leagueId}/deals/evaluate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
 
   getMyPosture: (leagueId: string) =>
     apiFetch<{ league_id: string; posture: string; is_override: boolean }>(

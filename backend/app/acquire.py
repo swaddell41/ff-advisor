@@ -352,7 +352,15 @@ def _build_packages(
         return {
             "kind": kind,
             "items": [
-                {"label": i.get("label") or i.get("name"), "value": i["value"]}
+                {
+                    "label": i.get("label") or i.get("name"),
+                    "value": i["value"],
+                    "ref": (
+                        {"type": "pick", "season": i["season"], "round": i["round"]}
+                        if "season" in i
+                        else {"type": "player", "player_id": i["player_id"]}
+                    ),
+                }
                 for i in items
             ],
             "package_value": total,

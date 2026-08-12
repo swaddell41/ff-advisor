@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from app.acquire import acquisition_report
 from app.db import get_connection
+from app.deals import evaluate_deal
 from app.sell import my_assets, sell_report
 from app.profiles.engine import (
     _get_manager_trades,
@@ -456,6 +457,45 @@ def get_sell_player(league_id: str, player_id: str):
             return sell_report(conn, uid, league_id, {"type": "player", "player_id": player_id})
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e))
+    finally:
+        conn.close()
+
+
+@router.get("/api/leagues/{league_id}/managers/{target_user_id}/assets")
+def get_manager_assets(league_id: str, target_user_id: str):
+    """A counterparty's tradable assets — used by the deal builder."""
+    conn = _conn()
+    try:
+        return my_assets(conn, target_user_id, league_id)
+    finally:
+        conn.close()
+
+
+class AssetRef(BaseModel):
+    type: str  # 'player' | 'pick'
+    player_id: str | None = None
+    season: int | None = None
+    round: int | None = None
+
+
+class DealEvaluateRequest(BaseModel):
+    counterparty_user_id: str
+    my_assets: list[AssetRef] = []
+    their_assets: list[AssetRef] = []
+
+
+@router.post("/api/leagues/{league_id}/deals/evaluate")
+def post_evaluate_deal(league_id: str, body: DealEvaluateRequest):
+    """Live evaluation of a working trade against the counterparty's demonstrated prices."""
+    uid = _require_user_id()
+    conn = _conn()
+    try:
+        return evaluate_deal(
+            conn, uid, league_id,
+            body.counterparty_user_id,
+            [a.model_dump() for a in body.my_assets],
+            [a.model_dump() for a in body.their_assets],
+        )
     finally:
         conn.close()
 

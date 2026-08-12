@@ -151,10 +151,24 @@ def _ask_packages(
             total += p["value"]
             if total >= ask_value * 0.9:
                 break
+    def _pick_item(p: dict) -> dict:
+        return {
+            "label": p["label"],
+            "value": p["value"],
+            "ref": {"type": "pick", "season": p["season"], "round": p["round"]},
+        }
+
+    def _player_item(pl: dict) -> dict:
+        return {
+            "label": f"{pl['name']} ({pl['position']})",
+            "value": pl["value"],
+            "ref": {"type": "player", "player_id": pl["player_id"]},
+        }
+
     if combo and total >= ask_value * 0.9:
         asks.append({
             "kind": "picks_only",
-            "items": [{"label": p["label"], "value": p["value"]} for p in combo],
+            "items": [_pick_item(p) for p in combo],
             "ask_total": total,
         })
 
@@ -167,7 +181,7 @@ def _ask_packages(
     if swap:
         asks.append({
             "kind": "player",
-            "items": [{"label": f"{swap['name']} ({swap['position']})", "value": swap["value"]}],
+            "items": [_player_item(swap)],
             "ask_total": swap["value"],
         })
 
@@ -181,10 +195,7 @@ def _ask_packages(
         if filler and pl["value"] >= ask_value * 0.4:
             asks.append({
                 "kind": "player_plus_pick",
-                "items": [
-                    {"label": f"{pl['name']} ({pl['position']})", "value": pl["value"]},
-                    {"label": filler["label"], "value": filler["value"]},
-                ],
+                "items": [_player_item(pl), _pick_item(filler)],
                 "ask_total": pl["value"] + filler["value"],
             })
             break
