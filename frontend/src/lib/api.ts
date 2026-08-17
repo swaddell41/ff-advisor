@@ -378,6 +378,35 @@ export interface SellResponse {
   buyers: SellBuyer[]
 }
 
+// ── Player card types ───────────────────────────────────────────────────────
+
+export interface PlayerCardValueSource {
+  current: number | null
+  history: { date: string; value: number }[]
+}
+
+export interface PlayerNewsItem {
+  title: string
+  link: string
+  source: string | null
+  published: string | null
+}
+
+export interface PlayerCard {
+  player_id: string
+  name: string
+  position: string | null
+  team: string | null
+  age: number | null
+  status: string | null
+  injury: { status: string | null; body_part: string | null; notes: string | null }
+  years_exp: number | null
+  depth_chart_order: number | null
+  format_key: string
+  values: Record<string, PlayerCardValueSource>
+  news: { items: PlayerNewsItem[]; cached: boolean; error?: string }
+}
+
 // ── Phase 3: Manager profile types ──────────────────────────────────────────
 
 export interface ManagerSummary {
@@ -486,6 +515,9 @@ export const api = {
 
   getManagerAssets: (leagueId: string, userId: string) =>
     apiFetch<MyAssetsResponse>(`/api/leagues/${leagueId}/managers/${userId}/assets`),
+
+  getPlayerCard: (leagueId: string, playerId: string) =>
+    apiFetch<PlayerCard>(`/api/leagues/${leagueId}/players/${playerId}/card`),
 
   getFreshness: () =>
     apiFetch<{ rosters_fetched_at: string | null; values_snapshot_date: string | null; market_snapshot_date: string | null }>('/api/freshness'),

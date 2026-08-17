@@ -11,6 +11,7 @@ import {
   type DealPackage,
   type LeagueSummaryForDashboard,
   type MyAssetsResponse,
+  type PlayerCard,
   type PositionalNeeds,
   type SellBuyer,
   type SellResponse,
@@ -61,6 +62,172 @@ function ScoreBar({ score }: { score: number }) {
       </div>
       <span className="text-xs font-mono text-muted-foreground w-7">{pct}</span>
     </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Player card modal (identity + three-source values + news)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function Sparkline({ history }: { history: { date: string; value: number }[] }) {
+  if (history.length < 2) return null
+  const vals = history.map(h => h.value)
+  const min = Math.min(...vals)
+  const max = Math.max(...vals)
+  const range = Math.max(1, max - min)
+  const pts = vals
+    .map((v, i) => `${(i / (vals.length - 1)) * 100},${28 - ((v - min) / range) * 24}`)
+    .join(' ')
+  const rising = vals[vals.length - 1] >= vals[0]
+  return (
+    <svg viewBox="0 0 100 30" className="w-24 h-7" preserveAspectRatio="none">
+      <polyline
+        points={pts}
+        fill="none"
+        strokeWidth="2"
+        className={rising ? 'stroke-green-500' : 'stroke-red-400'}
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
+  )
+}
+
+function newsAge(iso: string | null): string {
+  if (!iso) return ''
+  const days = (Date.now() - new Date(iso).getTime()) / 8.64e7
+  if (days < 1) return 'today'
+  if (days < 2) return 'yesterday'
+  return `${Math.floor(days)}d ago`
+}
+
+function PlayerCardModal({
+  leagueId, playerId, onClose,
+}: { leagueId: string; playerId: string; onClose: () => void }) {
+  const [card, setCard] = useState<PlayerCard | null>(null)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    setCard(null)
+    setError(false)
+    api.getPlayerCard(leagueId, playerId).then(setCard).catch(() => setError(true))
+  }, [leagueId, playerId])
+
+  const injury = card?.injury
+  const hasInjury = injury && (injury.status || injury.body_part)
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-xl max-h-[85vh] overflow-y-auto rounded-xl border border-border bg-background shadow-xl"
+        onClick={e => e.stopPropagation()}
+      >
+        {error ? (
+          <p className="text-sm text-muted-foreground p-6">Couldn't load this player.</p>
+        ) : !card ? (
+          <div className="p-6 space-y-3">
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-40 w-full" />
+          </div>
+        ) : (
+          <div className="p-5 space-y-4">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">{card.name}</h2>
+                <p className="text-xs text-muted-foreground font-mono">
+                  {card.position} · {card.team ?? 'FA'}
+                  {card.age != null && ` · ${card.age}y`}
+                  {card.years_exp != null && ` · yr ${card.years_exp + 1}`}
+                  {card.depth_chart_order != null && ` · depth #${card.depth_chart_order}`}
+                </p>
+              </div>
+              <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-sm">✕</button>
+            </div>
+
+            {hasInjury && (
+              <div className="text-xs px-2.5 py-1.5 rounded-md border border-red-300 bg-red-100 text-red-900 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300">
+                <span className="font-semibold">{injury!.status ?? 'Injury'}</span>
+                {injury!.body_part && ` — ${injury!.body_part}`}
+                {injury!.notes && ` (${injury!.notes})`}
+              </div>
+            )}
+
+            {/* Values */}
+            <div className="grid grid-cols-3 gap-2">
+              {(['ours', 'market', 'experts'] as const).map(key => {
+                const v = card.values[key]
+                const first = v?.history[0]?.value
+                const delta = v?.current != null && first != null && first > 0
+                  ? (v.current - first) / first
+                  : null
+                return (
+                  <div key={key} className="rounded-lg border border-border p-2.5">
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">{key}</p>
+                    <p className="text-base font-mono font-semibold">
+                      {v?.current != null ? v.current.toLocaleString() : '—'}
+                    </p>
+                    {delta != null && Math.abs(delta) >= 0.02 && (
+                      <p className={cn('text-[10px] font-mono', delta > 0 ? 'text-green-500' : 'text-red-400')}>
+                        {delta > 0 ? '▲' : '▼'} {Math.round(Math.abs(delta) * 100)}% since {v.history[0].date}
+                      </p>
+                    )}
+                    {key === 'ours' && v && <Sparkline history={v.history} />}
+                  </div>
+                )
+              })}
+            </div>
+            <p className="text-[10px] text-muted-foreground -mt-2">
+              ours = RosterAudit · market = FantasyCalc (real trades) · experts = DynastyProcess (consensus rankings) — all on the same 0–10k scale
+            </p>
+
+            {/* News */}
+            <div className="space-y-1.5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Around the league
+                {card.news.error && <span className="normal-case font-normal text-yellow-500"> (feed unavailable — showing cached)</span>}
+              </p>
+              {card.news.items.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic">No recent headlines found.</p>
+              ) : (
+                <div className="divide-y divide-border/50">
+                  {card.news.items.map((n, i) => (
+                    <a
+                      key={i}
+                      href={n.link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block py-1.5 group"
+                    >
+                      <p className="text-xs leading-snug group-hover:text-primary transition-colors">{n.title}</p>
+                      <p className="text-[10px] text-muted-foreground font-mono">
+                        {n.source ?? 'unknown'} · {newsAge(n.published)}
+                      </p>
+                    </a>
+                  ))}
+                </div>
+              )}
+              <p className="text-[10px] text-muted-foreground">Headlines via Google News · refreshed every 6h</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function InfoDot({ onOpen }: { onOpen: () => void }) {
+  return (
+    <button
+      onClick={e => { e.stopPropagation(); onOpen() }}
+      title="Player card: values, trend, and news"
+      className="text-muted-foreground/60 hover:text-primary transition-colors text-xs leading-none shrink-0"
+    >
+      ⓘ
+    </button>
   )
 }
 
@@ -250,12 +417,13 @@ function PackageCard({ pkg, onUse }: { pkg: DealPackage; onUse: () => void }) {
 }
 
 function AcquireTargetCard({
-  target, leagueId, onPickPlayer, onUsePackage,
+  target, leagueId, onPickPlayer, onUsePackage, onOpenCard,
 }: {
   target: AcquireTarget
   leagueId: string
   onPickPlayer: (target: AcquireTarget, p: AcquirePlayer) => void
   onUsePackage: (target: AcquireTarget, p: AcquirePlayer, pkg: DealPackage) => void
+  onOpenCard: (playerId: string) => void
 }) {
   const navigate = useNavigate()
   const [expanded, setExpanded] = useState(false)
@@ -290,11 +458,12 @@ function AcquireTargetCard({
 
       <div className="flex items-center gap-1.5 flex-wrap">
         {target.players.map(p => (
-          <button
+          <span
             key={p.player_id}
             onClick={() => onPickPlayer(target, p)}
+            role="button"
             className={cn(
-              'text-xs px-2 py-1 rounded-md border font-mono inline-flex items-center gap-1.5 transition-all hover:ring-2 hover:ring-ring/40',
+              'text-xs px-2 py-1 rounded-md border font-mono inline-flex items-center gap-1.5 transition-all cursor-pointer hover:ring-2 hover:ring-ring/40',
               p.likely_available
                 ? 'border-green-400 bg-green-100 text-green-900 dark:border-green-700 dark:bg-green-950/40 dark:text-green-300'
                 : 'border-border text-muted-foreground'
@@ -305,7 +474,8 @@ function AcquireTargetCard({
             <span className="opacity-70">{kv(p.value)}</span>
             {p.age != null && <span className="opacity-70">· {Math.floor(p.age)}y</span>}
             {p.likely_available && <span className="text-green-400">●</span>}
-          </button>
+            <InfoDot onOpen={() => onOpenCard(p.player_id)} />
+          </span>
         ))}
         {target.players.length === 0 && (
           <span className="text-xs text-muted-foreground italic">no players at this position</span>
@@ -478,8 +648,8 @@ function AcceptanceMeter({ ratio }: { ratio: number | null }) {
 }
 
 function ValueLensMeter({
-  ours, market, experts,
-}: { ours: number | null; market?: number | null; experts?: number | null }) {
+  ours, market, experts, dealHasPicks,
+}: { ours: number | null; market?: number | null; experts?: number | null; dealHasPicks?: boolean }) {
   const lenses = [
     { key: 'ours', label: 'ours', ratio: ours, glyph: 'bar' },
     { key: 'market', label: 'market', ratio: market, glyph: 'circle' },
@@ -517,6 +687,12 @@ function ValueLensMeter({
         <span>even</span>
         <span>you overpay</span>
       </div>
+      {dealHasPicks && lenses.some(l => l.key === 'experts') && (
+        <p className="text-[10px] text-muted-foreground italic leading-snug">
+          ◆ experts lens prices picks at our model's values — DynastyProcess publishes no pick
+          values, so on pick-heavy deals it will track "ours."
+        </p>
+      )}
       <div className="flex items-center gap-3 text-[10px] text-muted-foreground font-mono pt-0.5">
         {lenses.map(l => (
           <span key={l.key} className="inline-flex items-center gap-1">
@@ -530,17 +706,21 @@ function ValueLensMeter({
 }
 
 function DealRow({
-  item, ev, onRemove,
+  item, ev, onRemove, onOpenCard,
 }: {
   item: DealItem
   ev?: { value: number; perceived_value?: number; adjusted_value?: number; market_value?: number | null; consensus_value?: number | null; contested?: boolean; note: string | null }
   onRemove: () => void
+  onOpenCard?: (playerId: string) => void
 }) {
   const shown = ev?.perceived_value ?? ev?.adjusted_value
   return (
     <div className="group rounded-md hover:bg-muted/40 px-1.5 -mx-1.5">
       <div className="flex items-center gap-2 py-1">
         <span className="text-xs font-mono flex-1 min-w-0 truncate" title={item.label}>{item.label}</span>
+        {item.ref.type === 'player' && item.ref.player_id && onOpenCard && (
+          <InfoDot onOpen={() => onOpenCard(item.ref.player_id!)} />
+        )}
         {ev?.contested && (
           <span
             className="text-[10px] px-1 rounded border border-orange-400 bg-orange-100 text-orange-900 dark:border-orange-700 dark:bg-orange-950/40 dark:text-orange-300 font-mono shrink-0"
@@ -578,10 +758,11 @@ function DealRow({
 }
 
 function DealSideSection({
-  title, totalLine, items, evalSide, onRemove, addOptions, onAdd, emptyHint,
+  title, totalLine, items, evalSide, onRemove, addOptions, onAdd, emptyHint, onOpenCard,
 }: {
   title: string
   totalLine: string | null
+  onOpenCard?: (playerId: string) => void
   items: DealItem[]
   evalSide?: { label: string; ref: AssetRef; value: number; perceived_value?: number; adjusted_value?: number; market_value?: number | null; consensus_value?: number | null; contested?: boolean; note: string | null }[]
   onRemove: (i: number) => void
@@ -617,6 +798,7 @@ function DealSideSection({
                 item={item}
                 ev={evalSide?.find(e => refKey(e.ref) === refKey(item.ref))}
                 onRemove={() => onRemove(i)}
+                onOpenCard={onOpenCard}
               />
             ))}
             {totalLine && (
@@ -676,7 +858,7 @@ function assetsToDealItems(assets: MyAssetsResponse | null): DealItem[] {
 
 function DealBuilder({
   leagueId, counterparty, mySide, theirSide, myOptions, theirOptions,
-  onAddMine, onAddTheirs, onRemoveMine, onRemoveTheirs, onClear,
+  onAddMine, onAddTheirs, onRemoveMine, onRemoveTheirs, onClear, onOpenCard,
 }: {
   leagueId: string
   counterparty: { user_id: string; name: string }
@@ -689,6 +871,7 @@ function DealBuilder({
   onRemoveMine: (i: number) => void
   onRemoveTheirs: (i: number) => void
   onClear: () => void
+  onOpenCard: (playerId: string) => void
 }) {
   const [evaluation, setEvaluation] = useState<DealEvaluation | null>(null)
 
@@ -744,6 +927,7 @@ function DealBuilder({
           ours={evaluation?.raw_ratio ?? null}
           market={evaluation?.market_ratio}
           experts={evaluation?.consensus_ratio}
+          dealHasPicks={[...mySide, ...theirSide].some(i => i.ref.type === 'pick')}
         />
         {evaluation?.market_verdict && (
           <p className="text-xs text-muted-foreground leading-snug" title="FantasyCalc — values derived from real completed trades across thousands of leagues, normalized to our scale.">
@@ -768,6 +952,7 @@ function DealBuilder({
           addOptions={myOptions}
           onAdd={onAddMine}
           emptyHint="Click your war-chest assets, or + add"
+          onOpenCard={onOpenCard}
         />
         <DealSideSection
           title={`You get from ${counterparty.name}`}
@@ -778,6 +963,7 @@ function DealBuilder({
           addOptions={theirOptions}
           onAdd={onAddTheirs}
           emptyHint="Click a player on their card, or + add"
+          onOpenCard={onOpenCard}
         />
 
         {evaluation && (evaluation.beliefs?.length ?? 0) > 0 && (
@@ -835,6 +1021,9 @@ export default function TradeHub() {
   const [mySide, setMySide] = useState<DealItem[]>([])
   const [theirSide, setTheirSide] = useState<DealItem[]>([])
   const [counterpartyAssets, setCounterpartyAssets] = useState<MyAssetsResponse | null>(null)
+
+  // Player card modal
+  const [cardPlayerId, setCardPlayerId] = useState<string | null>(null)
 
   const setMode = (m: 'acquire' | 'sell') => setSearchParams(m === 'acquire' ? {} : { mode: m }, { replace: true })
 
@@ -1079,6 +1268,7 @@ export default function TradeHub() {
                   leagueId={acquireData.league_id}
                   onPickPlayer={handlePickPlayer}
                   onUsePackage={handleUsePackage}
+                  onOpenCard={setCardPlayerId}
                 />
               ))}
             </div>
@@ -1108,13 +1298,15 @@ export default function TradeHub() {
                         <span className="text-xs font-mono font-semibold text-muted-foreground w-7 pt-1.5">{pos}</span>
                         <div className="flex items-center gap-1.5 flex-wrap">
                           {players.map(p => (
-                            <AssetChip
-                              key={p.player_id}
-                              label={p.name}
-                              sub={`${kv(p.value)}${p.age != null ? ` · ${Math.floor(p.age)}y` : ''}`}
-                              selected={sellSelected?.type === 'player' && sellSelected.playerId === p.player_id}
-                              onClick={() => setSellSelected({ type: 'player', playerId: p.player_id, label: p.name })}
-                            />
+                            <span key={p.player_id} className="inline-flex items-center gap-1">
+                              <AssetChip
+                                label={p.name}
+                                sub={`${kv(p.value)}${p.age != null ? ` · ${Math.floor(p.age)}y` : ''}`}
+                                selected={sellSelected?.type === 'player' && sellSelected.playerId === p.player_id}
+                                onClick={() => setSellSelected({ type: 'player', playerId: p.player_id, label: p.name })}
+                              />
+                              <InfoDot onOpen={() => setCardPlayerId(p.player_id)} />
+                            </span>
                           ))}
                         </div>
                       </div>
@@ -1183,6 +1375,16 @@ export default function TradeHub() {
           onRemoveMine={i => setMySide(prev => prev.filter((_, idx) => idx !== i))}
           onRemoveTheirs={i => setTheirSide(prev => prev.filter((_, idx) => idx !== i))}
           onClear={() => { setCounterparty(null); setMySide([]); setTheirSide([]) }}
+          onOpenCard={setCardPlayerId}
+        />
+      )}
+
+      {/* Player card modal */}
+      {cardPlayerId && leagueId && (
+        <PlayerCardModal
+          leagueId={leagueId}
+          playerId={cardPlayerId}
+          onClose={() => setCardPlayerId(null)}
         />
       )}
     </div>

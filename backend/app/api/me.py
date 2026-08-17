@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from app.acquire import acquisition_report
 from app.db import get_connection
 from app.deals import evaluate_deal
+from app.player_news import player_card
 from app.refresh import data_freshness, refresh_current_leagues
 from app.sell import my_assets, sell_report
 from app.profiles.engine import (
@@ -429,6 +430,22 @@ def get_acquisition_report(league_id: str, position: str):
             return acquisition_report(conn, uid, league_id, position)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Player card (identity + values + news)
+# ---------------------------------------------------------------------------
+
+@router.get("/api/leagues/{league_id}/players/{player_id}/card")
+def get_player_card(league_id: str, player_id: str):
+    conn = _conn()
+    try:
+        card = player_card(conn, league_id, player_id)
+        if card is None:
+            raise HTTPException(status_code=404, detail=f"Player {player_id} not found")
+        return card
     finally:
         conn.close()
 
