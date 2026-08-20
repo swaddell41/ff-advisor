@@ -21,7 +21,10 @@
     </div>
     <div class="row" id="meta" hidden>
       <span id="draft-meta" class="muted"></span>
-      <label class="muted"><input type="checkbox" id="mode-toggle" /> dynasty values</label>
+      <span>
+        <label class="muted"><input type="checkbox" id="sf-toggle" /> SF</label>
+        <label class="muted"><input type="checkbox" id="mode-toggle" /> dynasty</label>
+      </span>
     </div>
   </header>
 
@@ -43,7 +46,8 @@
   </main>
 
   <footer class="muted">
-    Values: RosterAudit · FantasyCalc (redraft/market) · updated daily
+    <span>Values: RosterAudit · FantasyCalc · updated daily</span>
+    <button id="copy-debug" hidden title="Copy raw ESPN draft frames — paste these back to calibrate the parser if picks aren't registering">copy debug frames</button>
   </footer>
 
   <script src="panel.js"></script>

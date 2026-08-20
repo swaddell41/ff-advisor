@@ -1,13 +1,17 @@
 /**
- * Draft assistant side panel.
+ * Draft assistant side panel — Sleeper + ESPN.
  *
- * Data flow:
- *   - Sleeper public API: draft settings + live picks (polled every 4s)
- *   - ff-advisor API: the ranked board (values, tiers, injuries), fetched
- *     once per mode/format and filtered client-side as picks come in
+ * Sleeper: draft settings + live picks from the public API (polled).
+ * ESPN:    picks arrive via chrome.storage, written by the content script
+ *          that taps the draft room's WebSocket. Player matching runs
+ *          through the espn_id on each board row.
  *
- * Also runs as a plain web page for testing: panel.html?draft=<id>
- * (chrome.* APIs are feature-detected).
+ * Board: ff-advisor API, fetched once per mode/format, filtered client-side.
+ *
+ * Test modes (plain web page):
+ *   panel.html?draft=<sleeper_draft_id>          — real Sleeper draft
+ *   panel.html?espn_sim=30                       — simulate an ESPN draft
+ *   &api=http://localhost:8000                   — local backend
  */
 
 const API_BASE =
@@ -19,10 +23,14 @@ const POLL_MS = 4000;
 const isExt = typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local;
 
 const state = {
+  platform: null,       // 'sleeper' | 'espn'
   draftId: null,
   draft: null,          // Sleeper draft object
-  board: null,          // ff-advisor board
-  picks: [],            // Sleeper picks
+  board: null,
+  espnMap: null,        // espn_id -> board player
+  picks: [],            // sleeper picks (raw) — sleeper mode only
+  espn: null,           // {picks:[{espn_id,team_id,pick_no}], myTeamId}
+  espnUnmatched: 0,
   pickedIds: new Set(),
   mode: 'redraft',
   format: 'sf_ppr',
@@ -36,22 +44,35 @@ const $ = (id) => document.getElementById(id);
 // ── Boot ────────────────────────────────────────────────────────────────────
 
 async function boot() {
-  const urlDraft = new URLSearchParams(location.search).get('draft');
-  if (urlDraft) {
-    connect(urlDraft);
+  const qs = new URLSearchParams(location.search);
+  const urlDraft = qs.get('draft');
+  const espnSim = qs.get('espn_sim');
+
+  if (espnSim) {
+    await connectEspnSim(parseInt(espnSim, 10) || 24);
+  } else if (urlDraft) {
+    connectSleeper(urlDraft);
   } else if (isExt) {
-    chrome.storage.local.get(['draftId', 'username'], (v) => {
+    chrome.storage.local.get(['draftId', 'draftIdSetAt', 'username', 'espnDraft'], (v) => {
       if (v.username) {
         state.username = v.username;
         $('username-input').value = v.username;
         resolveUser(v.username);
       }
-      if (v.draftId) connect(v.draftId);
+      const espnFresh =
+        v.espnDraft && Date.now() - (v.espnDraft.updatedAt || 0) < 6 * 3600 * 1000;
+      const espnNewer = espnFresh && (v.espnDraft.updatedAt || 0) > (v.draftIdSetAt || 0);
+      if (espnNewer || (espnFresh && !v.draftId)) connectEspn(v.espnDraft);
+      else if (v.draftId) connectSleeper(v.draftId);
     });
-    // Follow the user into new draft rooms.
     chrome.storage.onChanged.addListener((changes) => {
       if (changes.draftId && changes.draftId.newValue !== state.draftId) {
-        connect(changes.draftId.newValue);
+        connectSleeper(changes.draftId.newValue);
+      }
+      if (changes.espnDraft && changes.espnDraft.newValue) {
+        const d = changes.espnDraft.newValue;
+        if (state.platform !== 'espn') connectEspn(d);
+        else updateEspn(d);
       }
     });
   }
@@ -59,7 +80,7 @@ async function boot() {
   $('connect').addEventListener('click', () => {
     const raw = $('draft-input').value.trim();
     const m = raw.match(/(\d{10,})/);
-    if (m) connect(m[1]);
+    if (m) connectSleeper(m[1]);
   });
   $('save-user').addEventListener('click', () => {
     const u = $('username-input').value.trim();
@@ -71,7 +92,22 @@ async function boot() {
   $('mode-toggle').addEventListener('change', async (e) => {
     state.mode = e.target.checked ? 'dynasty' : 'redraft';
     await loadBoard();
+    refreshPickedIds();
     render();
+  });
+  $('sf-toggle').addEventListener('change', async (e) => {
+    state.format = e.target.checked ? 'sf_ppr' : '1qb_ppr';
+    await loadBoard();
+    refreshPickedIds();
+    render();
+  });
+  $('copy-debug').addEventListener('click', () => {
+    if (!isExt) return;
+    chrome.storage.local.get(['espnDebugFrames'], (v) => {
+      navigator.clipboard.writeText((v.espnDebugFrames || []).join('\n'));
+      $('copy-debug').textContent = 'copied!';
+      setTimeout(() => ($('copy-debug').textContent = 'copy debug frames'), 1500);
+    });
   });
   document.querySelectorAll('#tabs button').forEach((b) =>
     b.addEventListener('click', () => {
@@ -93,12 +129,24 @@ async function resolveUser(username) {
   render();
 }
 
-// ── Draft connection ────────────────────────────────────────────────────────
+async function loadBoard() {
+  const r = await fetch(`${API_BASE}/api/draftboard?format=${state.format}&mode=${state.mode}`);
+  state.board = await r.json();
+  state.espnMap = new Map();
+  for (const p of state.board.players) {
+    if (p.espn_id) state.espnMap.set(String(p.espn_id), p);
+  }
+}
+
+// ── Sleeper mode ────────────────────────────────────────────────────────────
 
 let pollTimer = null;
 
-async function connect(draftId) {
+async function connectSleeper(draftId) {
+  state.platform = 'sleeper';
   state.draftId = draftId;
+  state.espn = null;
+  $('copy-debug').hidden = true;
   $('status').textContent = 'connecting…';
   try {
     const r = await fetch(`${SLEEPER}/v1/draft/${draftId}`);
@@ -116,24 +164,20 @@ async function connect(draftId) {
   state.format = sf ? 'sf_ppr' : '1qb_ppr';
   state.mode = dynasty ? 'dynasty' : 'redraft';
   $('mode-toggle').checked = state.mode === 'dynasty';
+  $('sf-toggle').checked = sf;
 
   $('meta').hidden = false;
   $('draft-meta').textContent =
-    `${s.teams || '?'} teams · ${s.rounds || '?'} rds · ${sf ? 'SF' : '1QB'} · ${state.draft.type || ''}`;
+    `Sleeper · ${s.teams || '?'} tm · ${s.rounds || '?'} rds · ${sf ? 'SF' : '1QB'} · ${state.draft.type || ''}`;
 
   await loadBoard();
-  await poll();
+  await pollSleeper();
   if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(poll, POLL_MS);
+  pollTimer = setInterval(pollSleeper, POLL_MS);
 }
 
-async function loadBoard() {
-  const r = await fetch(`${API_BASE}/api/draftboard?format=${state.format}&mode=${state.mode}`);
-  state.board = await r.json();
-}
-
-async function poll() {
-  if (!state.draftId) return;
+async function pollSleeper() {
+  if (state.platform !== 'sleeper' || !state.draftId) return;
   try {
     const r = await fetch(`${SLEEPER}/v1/draft/${state.draftId}/picks`);
     state.picks = (await r.json()) || [];
@@ -148,36 +192,116 @@ async function poll() {
   }
 }
 
+// ── ESPN mode ───────────────────────────────────────────────────────────────
+
+async function connectEspn(espnDraft) {
+  state.platform = 'espn';
+  state.draft = null;
+  if (pollTimer) clearInterval(pollTimer);
+  $('copy-debug').hidden = !isExt;
+
+  // Mocks and most ESPN leagues are 1QB redraft; toggles override.
+  state.format = $('sf-toggle').checked ? 'sf_ppr' : '1qb_ppr';
+  state.mode = $('mode-toggle').checked ? 'dynasty' : 'redraft';
+
+  $('meta').hidden = false;
+  await loadBoard();
+  updateEspn(espnDraft);
+}
+
+function updateEspn(espnDraft) {
+  state.espn = espnDraft;
+  refreshPickedIds();
+  const n = espnDraft.picks.length;
+  $('draft-meta').textContent =
+    `ESPN${espnDraft.leagueId ? ' · league ' + espnDraft.leagueId : ''} · ${$('sf-toggle').checked ? 'SF' : '1QB'}`;
+  $('status').textContent =
+    `pick ${n + 1}` +
+    (state.espnUnmatched ? ` · ${state.espnUnmatched} unmatched` : '') +
+    (n === 0 ? ' · waiting for picks' : '');
+  render();
+}
+
+function refreshPickedIds() {
+  if (state.platform === 'espn' && state.espn && state.espnMap) {
+    state.pickedIds = new Set();
+    state.espnUnmatched = 0;
+    for (const p of state.espn.picks) {
+      const match = state.espnMap.get(String(p.espn_id));
+      if (match) state.pickedIds.add(String(match.player_id));
+      else state.espnUnmatched += 1;
+    }
+  } else if (state.platform === 'sleeper') {
+    state.pickedIds = new Set(state.picks.map((p) => String(p.player_id)));
+  }
+}
+
+// Offline ESPN simulation: fabricate a draft from the board's own top rows.
+async function connectEspnSim(nPicks) {
+  state.format = '1qb_ppr';
+  state.mode = 'redraft';
+  await loadBoard();
+  const withEspn = state.board.players.filter((p) => p.espn_id);
+  const picks = withEspn.slice(0, nPicks).map((p, i) => ({
+    espn_id: String(p.espn_id),
+    team_id: String((i % 10) + 1),
+    pick_no: i + 1,
+  }));
+  await connectEspn({ leagueId: 'SIM', myTeamId: '3', picks, updatedAt: Date.now() });
+}
+
 // ── Rendering ───────────────────────────────────────────────────────────────
 
-const POS_TARGETS = { QB: 2, RB: 5, WR: 5, TE: 2 }; // loose roster targets for need hints
+const POS_TARGETS = { QB: 2, RB: 5, WR: 5, TE: 2 };
+
+function currentPickNumber() {
+  if (state.platform === 'espn') return (state.espn ? state.espn.picks.length : 0) + 1;
+  return state.picks.length + 1;
+}
 
 function render() {
   renderMyRoster();
   renderBoard();
 }
 
+function myPickEntries() {
+  if (state.platform === 'espn') {
+    if (!state.espn || !state.espn.myTeamId) return null;
+    return state.espn.picks
+      .filter((p) => p.team_id === String(state.espn.myTeamId))
+      .map((p) => {
+        const match = state.espnMap && state.espnMap.get(String(p.espn_id));
+        return { name: match ? match.name : `espn:${p.espn_id}`, pos: match ? match.position : '?' };
+      });
+  }
+  if (!state.myUserId || !state.picks.length) return null;
+  return state.picks
+    .filter((p) => String(p.picked_by) === state.myUserId)
+    .map((p) => {
+      const meta = p.metadata || {};
+      return {
+        name: `${meta.first_name ? meta.first_name[0] + '. ' : ''}${meta.last_name || p.player_id}`,
+        pos: meta.position || '?',
+      };
+    });
+}
+
 function renderMyRoster() {
   const box = $('my-roster');
-  if (!state.myUserId || !state.picks.length || !state.board) {
-    box.hidden = true;
-    return;
-  }
-  const mine = state.picks.filter((p) => String(p.picked_by) === state.myUserId);
-  if (!mine.length) {
+  const mine = myPickEntries();
+  if (!mine || !mine.length) {
     box.hidden = true;
     return;
   }
   box.hidden = false;
 
   const counts = {};
-  const chips = mine.map((p) => {
-    const meta = p.metadata || {};
-    const pos = meta.position || '?';
-    counts[pos] = (counts[pos] || 0) + 1;
-    return `<span class="chip">${meta.first_name ? meta.first_name[0] + '. ' : ''}${meta.last_name || p.player_id} <span class="muted">${pos}</span></span>`;
-  });
-  $('my-picks').innerHTML = chips.join('');
+  $('my-picks').innerHTML = mine
+    .map((p) => {
+      counts[p.pos] = (counts[p.pos] || 0) + 1;
+      return `<span class="chip">${p.name} <span class="muted">${p.pos}</span></span>`;
+    })
+    .join('');
 
   const needs = Object.entries(POS_TARGETS)
     .filter(([pos, target]) => (counts[pos] || 0) < target)
@@ -189,7 +313,8 @@ function renderBoard() {
   const main = $('board');
   if (!state.board) return;
 
-  const currentPick = state.picks.length + 1;
+  const currentPick = currentPickNumber();
+  const anyPicks = currentPick > 1;
   let players = state.board.players.filter((p) => !state.pickedIds.has(String(p.player_id)));
   if (state.tab !== 'ALL') players = players.filter((p) => p.position === state.tab);
 
@@ -200,9 +325,8 @@ function renderBoard() {
       rows.push(`<div class="tier-break">Tier ${p.tier}</div>`);
       lastTier = p.tier;
     }
-    // Falling value: ranked meaningfully earlier than the current pick.
     const delta = currentPick - p.overall_rank;
-    const steal = state.picks.length > 0 && delta >= 6
+    const steal = anyPicks && delta >= 6
       ? `<span class="steal" title="Ranked #${p.overall_rank} overall, still available at pick ${currentPick}">+${delta}</span>`
       : '';
     const inj = p.injury_status

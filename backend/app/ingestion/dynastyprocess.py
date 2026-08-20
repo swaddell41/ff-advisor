@@ -55,6 +55,22 @@ def write_dynastyprocess_snapshots(
         and r.get("sleeper_id") not in (None, "", "NA")
     }
 
+    # Persist the cross-platform id crosswalk while we have it — the ESPN
+    # draft assistant matches ESPN pick events to sleeper-keyed board rows.
+    n_ids = 0
+    for r in ids:
+        sid = r.get("sleeper_id")
+        eid = r.get("espn_id")
+        if sid in (None, "", "NA") or eid in (None, "", "NA"):
+            continue
+        conn.execute(
+            "INSERT OR REPLACE INTO player_ids (sleeper_id, espn_id) VALUES (?, ?)",
+            (sid, eid),
+        )
+        n_ids += 1
+    conn.commit()
+    logger.info("player_ids crosswalk: %d rows", n_ids)
+
     d_iso = snapshot_date.isoformat()
     total = 0
 

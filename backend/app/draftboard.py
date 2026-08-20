@@ -52,9 +52,11 @@ def draft_board(conn: Connection, fmt: str = "sf_ppr", mode: str = "redraft") ->
                pl.full_name, pl.position, pl.team, pl.birth_date, pl.raw_json,
                dyn.value as dynasty_value,
                mkt.value as market_value,
-               adp.adp as adp
+               adp.adp as adp,
+               ids.espn_id as espn_id
         FROM value_snapshots vs
         JOIN players pl ON pl.sleeper_id = vs.player_id
+        LEFT JOIN player_ids ids ON ids.sleeper_id = vs.player_id
         LEFT JOIN value_snapshots dyn
                ON dyn.player_id = vs.player_id AND dyn.source='rosteraudit'
               AND dyn.format = ? AND dyn.snapshot_date = ?
@@ -87,6 +89,7 @@ def draft_board(conn: Connection, fmt: str = "sf_ppr", mode: str = "redraft") ->
             "dynasty_value": r["dynasty_value"],
             "market_value": r["market_value"],
             "adp": r["adp"],
+            "espn_id": r["espn_id"],
             "injury_status": injury,
         })
 

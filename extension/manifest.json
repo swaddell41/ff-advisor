@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Dynasty Advisor — Draft Assistant",
-  "version": "0.1.0",
-  "description": "Live draft board for Sleeper drafts: multi-source values, tier breaks, roster needs, and falling-value alerts.",
+  "version": "0.2.0",
+  "description": "Live draft board for Sleeper and ESPN drafts: multi-source values, tier breaks, roster needs, and falling-value alerts.",
   "permissions": ["sidePanel", "storage"],
   "host_permissions": [
     "https://api.sleeper.app/*",
@@ -15,6 +15,17 @@
     {
       "matches": ["https://sleeper.com/draft/*"],
       "js": ["content.js"]
+    },
+    {
+      "matches": ["https://fantasy.espn.com/football/draft*"],
+      "js": ["content-espn.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inject-espn.js"],
+      "matches": ["https://fantasy.espn.com/*"]
     }
   ],
   "icons": {}

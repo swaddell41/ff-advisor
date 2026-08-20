@@ -50,6 +50,7 @@ TABLE_PKS: dict[str, list[str]] = {
     "sessions": ["token"],
     "user_leagues": ["sleeper_user_id", "league_id"],
     "adp_snapshots": ["player_id", "source", "format", "snapshot_date"],
+    "player_ids": ["sleeper_id"],
 }
 
 
@@ -393,6 +394,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
             sleeper_user_id TEXT NOT NULL,
             league_id       TEXT NOT NULL,
             PRIMARY KEY (sleeper_user_id, league_id)
+        );
+
+        -- Cross-platform player id mapping (from the DynastyProcess
+        -- crosswalk). Lets the ESPN draft assistant match ESPN pick events
+        -- to our sleeper-keyed board.
+        CREATE TABLE IF NOT EXISTS player_ids (
+            sleeper_id TEXT PRIMARY KEY,
+            espn_id    TEXT
         );
 
         -- Average draft position (redraft), from FantasyCalc. Powers the
