@@ -3,6 +3,7 @@ import { Routes, Route, Link, Navigate, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import MyDashboard from '@/pages/MyDashboard'
+import Onboarding from '@/pages/Onboarding'
 import TradeHub from '@/pages/TradeHub'
 import LeaguePicker from '@/pages/LeaguePicker'
 import TradeHistory from '@/pages/TradeHistory'
@@ -76,7 +77,41 @@ function FreshnessChip() {
   )
 }
 
+function SessionBadge() {
+  const [name, setName] = useState<string | null>(null)
+  useEffect(() => {
+    api.authMe().then(u => setName(u.display_name ?? u.username ?? u.user_id)).catch(() => {})
+  }, [])
+  if (!name) return null
+  return (
+    <span className="text-xs text-muted-foreground">
+      {name}{' '}
+      <button
+        onClick={() => api.logout().then(() => window.location.reload())}
+        className="underline underline-offset-2 hover:text-foreground"
+      >
+        sign out
+      </button>
+    </span>
+  )
+}
+
 export default function App() {
+  // Gate: /api/me succeeds for a session user OR the local .env fallback.
+  const [gate, setGate] = useState<'loading' | 'in' | 'out'>('loading')
+  useEffect(() => {
+    api.getMe().then(() => setGate('in')).catch(() => setGate('out'))
+  }, [])
+
+  if (gate === 'loading') return null
+  if (gate === 'out') {
+    return (
+      <div className="min-h-screen bg-background text-foreground">
+        <Onboarding onDone={() => window.location.reload()} />
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="border-b border-border px-6 py-3 flex items-center justify-between">
@@ -91,6 +126,7 @@ export default function App() {
           </nav>
         </div>
         <div className="flex items-center gap-3">
+          <SessionBadge />
           <FreshnessChip />
           <span className="text-xs text-muted-foreground">
             Values by{' '}

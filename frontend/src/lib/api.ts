@@ -516,6 +516,32 @@ export const api = {
   getManagerAssets: (leagueId: string, userId: string) =>
     apiFetch<MyAssetsResponse>(`/api/leagues/${leagueId}/managers/${userId}/assets`),
 
+  // ── Auth / onboarding ──────────────────────────────────────────────────
+  authMe: () =>
+    apiFetch<{ user_id: string; username: string | null; display_name: string | null; selected_leagues: string[] }>('/api/auth/me'),
+
+  login: (username: string) =>
+    apiFetch<{
+      user_id: string; username: string | null; display_name: string | null
+      leagues: { league_id: string; name: string; season: string; total_rosters: number; imported: boolean; selected: boolean }[]
+    }>('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username }),
+    }),
+
+  logout: () => apiFetch<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+
+  onboardLeagues: (leagueIds: string[]) =>
+    apiFetch<{ selected: string[]; imports_started: string[] }>('/api/onboard/leagues', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ league_ids: leagueIds }),
+    }),
+
+  onboardStatus: () =>
+    apiFetch<{ leagues: Record<string, { status: string; detail: string | null }> }>('/api/onboard/status'),
+
   getPlayerCard: (leagueId: string, playerId: string) =>
     apiFetch<PlayerCard>(`/api/leagues/${leagueId}/players/${playerId}/card`),
 

@@ -221,6 +221,30 @@ def init_schema(conn: sqlite3.Connection) -> None:
         -- complete from the start)
         -- ----------------------------------------------------------------
 
+        -- ----------------------------------------------------------------
+        -- Multi-user: app accounts (claim-based — Sleeper username, no
+        -- password; fine for a small trusted circle), sessions, and which
+        -- leagues each user chose to import.
+        -- ----------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS app_users (
+            sleeper_user_id TEXT PRIMARY KEY,
+            username        TEXT,
+            display_name    TEXT,
+            created_at      TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            token           TEXT PRIMARY KEY,
+            sleeper_user_id TEXT NOT NULL,
+            created_at      TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS user_leagues (
+            sleeper_user_id TEXT NOT NULL,
+            league_id       TEXT NOT NULL,
+            PRIMARY KEY (sleeper_user_id, league_id)
+        );
+
         -- grade_type: 'decision' | 'outcome'
         -- decision = values at time of trade
         -- outcome  = current values

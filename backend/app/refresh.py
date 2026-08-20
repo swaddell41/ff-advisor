@@ -29,6 +29,14 @@ def _league_ids_from_env() -> list[str]:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
+def _all_current_league_ids(conn: Connection) -> list[str]:
+    """Every league any app user has selected, plus the .env set."""
+    ids = set(_league_ids_from_env())
+    for r in conn.execute("SELECT DISTINCT league_id FROM user_leagues").fetchall():
+        ids.add(r["league_id"])
+    return sorted(ids)
+
+
 def refresh_current_leagues(conn: Connection) -> dict:
     """Refresh rosters/trades/traded-picks for the current leagues. Returns a summary."""
     from scripts.ingest_leagues import (
@@ -38,15 +46,18 @@ def refresh_current_leagues(conn: Connection) -> dict:
     )
 
     client = SleeperClient(conn)
-    league_ids = _league_ids_from_env()
+    league_ids = _all_current_league_ids(conn)
     new_trades = 0
 
     for league_id in league_ids:
-        roster_to_user = ingest_managers(conn, client, league_id)
         season_row = conn.execute(
             "SELECT season FROM leagues WHERE id = ?", (league_id,)
         ).fetchone()
-        season = season_row["season"] if season_row else None
+        if season_row is None:
+            # Selected but never imported — the onboarding job owns first import.
+            continue
+        roster_to_user = ingest_managers(conn, client, league_id)
+        season = season_row["season"]
         new_trades += ingest_trades(
             conn, client, league_id, season, roster_to_user, mutable=True
         )

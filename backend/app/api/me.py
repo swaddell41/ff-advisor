@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.acquire import acquisition_report
+from app.auth import current_session_user
 from app.db import get_connection
 from app.deals import evaluate_deal
 from app.player_news import player_card
@@ -47,10 +48,14 @@ def _conn():
 
 
 def _require_user_id():
+    """Session user when signed in; .env fallback keeps local dev working."""
+    session_uid = current_session_user.get()
+    if session_uid:
+        return session_uid
     if not MY_USER_ID:
         raise HTTPException(
-            status_code=400,
-            detail="SLEEPER_USER_ID is not set in .env",
+            status_code=401,
+            detail="Not signed in (and no SLEEPER_USER_ID fallback set)",
         )
     return MY_USER_ID
 
