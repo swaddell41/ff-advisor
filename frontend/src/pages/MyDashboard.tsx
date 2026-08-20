@@ -64,20 +64,25 @@ function LensChip({ lens, grades }: { lens: string; grades: { decision: import('
   const d = grades.decision
   const o = grades.outcome
   if (!d && !o) return null
-  const shown = d ?? o!
+  // Hindsight is the point: color by where the trade stands TODAY, show
+  // the journey (decision→outcome) when the grade has moved.
+  const current = o ?? d!
+  const moved = d && o && d.letter !== o.letter
   const title = [
     LENS_TITLES[lens],
     d ? `At the time: ${d.letter} (${d.pct > 0 ? '+' : ''}${Math.round(d.pct * 100)}%)${d.estimated ? ' — estimated, no price history that far back' : ''}` : null,
-    o ? `Today: ${o.letter} (${o.pct > 0 ? '+' : ''}${Math.round(o.pct * 100)}%)` : null,
+    o ? `Today: ${o.letter} (${o.pct > 0 ? '+' : ''}${Math.round(o.pct * 100)}%)${o.realized ? ' — conveyed picks valued as the players drafted with them' : ''}` : null,
+    'Outcome grades move as values change — a contested buy that hits will climb over time.',
   ].filter(Boolean).join(' · ')
   return (
     <span
       title={title}
-      className={cn('text-xs font-mono px-1 py-0.5 rounded border inline-flex items-center gap-0.5', gradeBadgeVariant(shown.letter))}
+      className={cn('text-xs font-mono px-1 py-0.5 rounded border inline-flex items-center gap-0.5', gradeBadgeVariant(current.letter))}
     >
       <span className="opacity-60 text-[9px]">{LENS_LABELS[lens]}</span>
-      {shown.letter}
+      {moved ? `${d!.letter}→${o!.letter}` : current.letter}
       {d?.estimated && <span className="opacity-60">~</span>}
+      {o?.realized && <span className="opacity-60" title="Conveyed picks valued as the players drafted with them">•</span>}
     </span>
   )
 }

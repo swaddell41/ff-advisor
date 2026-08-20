@@ -25,11 +25,8 @@ from __future__ import annotations
 from datetime import date
 from sqlite3 import Connection
 
-from app.grading.engine import (
-    _parse_trade_date,
-    _value_assets_for_roster,
-    assign_letter_grade,
-)
+from app.grading.engine import _parse_trade_date, assign_letter_grade
+from app.pick_conversion import PickResolutionContext
 
 # (key, player/value source, pick source)
 LENSES = [
@@ -82,13 +79,76 @@ class SnapshotValueSource:
         return (row["mid_value"], True) if row else (None, False)
 
 
-def lens_grades(conn: Connection, trade_id: str, roster_id: int) -> dict:
+def _value_assets(
+    conn: Connection,
+    trade_id: str,
+    roster_id: int,
+    direction: str,
+    fmt: str,
+    as_of: date,
+    source: SnapshotValueSource,
+    resolver: PickResolutionContext | None,
+) -> tuple[int, bool, bool]:
+    """
+    Sum one side's asset values. When a resolver is given (outcome pass),
+    picks whose draft has already happened are valued as the PLAYER actually
+    selected with them — real hindsight, not generic pick value.
+
+    Returns (total, used_fallback, any_pick_realized).
+    """
+    col = "to_roster_id" if direction == "received" else "from_roster_id"
+    rows = conn.execute(
+        f"SELECT asset_type, player_id, pick_season, pick_round, "
+        f"pick_original_owner_roster_id FROM trade_assets "
+        f"WHERE trade_id = ? AND {col} = ? AND asset_type != 'faab'",
+        (trade_id, roster_id),
+    ).fetchall()
+
+    total = 0
+    used_fallback = False
+    realized = False
+
+    for row in rows:
+        if row["asset_type"] == "player":
+            val, fb = source.get_player_value(row["player_id"], fmt, as_of)
+            if val is not None:
+                total += val
+                used_fallback = used_fallback or fb
+            continue
+
+        # pick asset
+        if resolver is not None:
+            pid, status = resolver.resolve_pick(
+                row["pick_season"], row["pick_round"], row["pick_original_owner_roster_id"]
+            )
+            if status == "resolved" and pid:
+                val, fb = source.get_player_value(pid, fmt, as_of)
+                if val is not None:
+                    total += val
+                    used_fallback = used_fallback or fb
+                    realized = True
+                    continue
+        val, fb = source.get_pick_value(row["pick_season"], row["pick_round"], fmt, as_of)
+        if val is not None:
+            total += val
+            used_fallback = used_fallback or fb
+
+    return total, used_fallback, realized
+
+
+def lens_grades(
+    conn: Connection,
+    trade_id: str,
+    roster_id: int,
+    resolver: PickResolutionContext | None = None,
+) -> dict:
     """
     Grade one side of one trade through all three lenses.
 
     Returns {lens: {"decision": g, "outcome": g}} where g is
-    {"letter", "pct", "received", "given", "estimated"} or None when the
-    lens has no data for any asset in the trade.
+    {"letter", "pct", "received", "given", "estimated", "realized"} or None
+    when the lens has no data for any asset in the trade. "realized" marks
+    outcome grades where a traded pick was valued as the player it became.
     """
     trade_row = conn.execute(
         "SELECT league_id, executed_at FROM trades WHERE id = ?", (trade_id,)
@@ -102,16 +162,22 @@ def lens_grades(conn: Connection, trade_id: str, roster_id: int) -> dict:
     trade_date = _parse_trade_date(trade_row["executed_at"])
     today = date.today()
 
+    if resolver is None:
+        resolver = PickResolutionContext(conn, trade_row["league_id"])
+
     out: dict[str, dict] = {}
     for key, source_name, pick_source in LENSES:
         source = SnapshotValueSource(conn, source_name, pick_source)
         lens: dict[str, dict | None] = {}
         for grade_type, as_of in (("decision", trade_date), ("outcome", today)):
-            received, fb_r = _value_assets_for_roster(
-                conn, trade_id, roster_id, "received", fmt, as_of, source
+            # Decision = what was knowable then (generic pick values).
+            # Outcome = hindsight (conveyed picks become the drafted player).
+            res = resolver if grade_type == "outcome" else None
+            received, fb_r, real_r = _value_assets(
+                conn, trade_id, roster_id, "received", fmt, as_of, source, res
             )
-            given, fb_g = _value_assets_for_roster(
-                conn, trade_id, roster_id, "given", fmt, as_of, source
+            given, fb_g, real_g = _value_assets(
+                conn, trade_id, roster_id, "given", fmt, as_of, source, res
             )
             if received == 0 and given == 0:
                 lens[grade_type] = None
@@ -126,6 +192,7 @@ def lens_grades(conn: Connection, trade_id: str, roster_id: int) -> dict:
                 # Outcome grades always use current prices; only decision
                 # grades can be backfilled estimates.
                 "estimated": (fb_r or fb_g) if grade_type == "decision" else False,
+                "realized": (real_r or real_g) if grade_type == "outcome" else False,
             }
         out[key] = lens
     return out

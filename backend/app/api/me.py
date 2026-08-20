@@ -247,6 +247,10 @@ def _extract_bias_highlights(pos_biases: dict, age_biases: dict) -> list[dict]:
 def _build_recent_trades(conn, trades: list[dict]) -> list[dict]:
     """Enrich recent trades with league name, asset names, and lens grades."""
     from app.multi_grade import lens_grades
+    from app.pick_conversion import PickResolutionContext
+
+    # One pick resolver per league family — draft parsing isn't free.
+    resolvers: dict[str, PickResolutionContext] = {}
 
     result = []
     for t in trades:
@@ -257,8 +261,12 @@ def _build_recent_trades(conn, trades: list[dict]) -> list[dict]:
         received_names = _asset_labels(t["assets_received"])
         given_names = _asset_labels(t["assets_given"])
 
+        lid = t["league_id"]
+        if lid not in resolvers:
+            resolvers[lid] = PickResolutionContext(conn, lid)
+
         result.append({
-            "lenses": lens_grades(conn, t["trade_id"], t["roster_id"]),
+            "lenses": lens_grades(conn, t["trade_id"], t["roster_id"], resolver=resolvers[lid]),
             "trade_id": t["trade_id"],
             "league_id": t["league_id"],
             "league_name": league_row["name"] if league_row else t["league_id"],
@@ -492,13 +500,21 @@ def cron_daily(request: Request):
     if secret and request.headers.get("authorization") != f"Bearer {secret}":
         raise HTTPException(status_code=401, detail="Bad cron secret")
 
+    from app.grading.engine import grade_all
     from app.snapshots import run_value_snapshots
 
     conn = _conn()
     try:
         refresh_summary = refresh_current_leagues(conn)
         snapshot_summary = run_value_snapshots(conn)
-        return {"refresh": refresh_summary, "snapshots": snapshot_summary}
+        # Re-grade everything so stored OUTCOME grades track today's values —
+        # hindsight is supposed to move as players prove out. Idempotent.
+        regraded = grade_all(conn)
+        return {
+            "refresh": refresh_summary,
+            "snapshots": snapshot_summary,
+            "regraded_leagues": len(regraded),
+        }
     finally:
         conn.close()
 

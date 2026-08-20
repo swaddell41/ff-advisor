@@ -85,6 +85,7 @@ export interface LensGrade {
   received: number
   given: number
   estimated: boolean
+  realized?: boolean
 }
 
 export interface RecentTrade {
