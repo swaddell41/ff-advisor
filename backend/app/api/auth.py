@@ -11,6 +11,7 @@ GET  /api/onboard/status  → import progress for my selected leagues
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -27,7 +28,7 @@ from app.onboarding import (
     get_job_statuses,
     list_user_leagues,
     lookup_sleeper_user,
-    start_import,
+    run_import_sync,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ def login(body: LoginRequest, response: Response):
         response.set_cookie(
             SESSION_COOKIE, token,
             httponly=True, samesite="lax", max_age=180 * 86400,
+            secure=bool(os.environ.get("VERCEL")),
         )
 
         leagues = list_user_leagues(uid)
@@ -144,11 +146,35 @@ def onboard_leagues(body: OnboardLeaguesRequest, request: Request):
                 (uid, lid),
             )
         conn.commit()
-
-        started = [lid for lid in body.league_ids if start_import(lid)]
-        return {"selected": body.league_ids, "imports_started": started}
+        return {"selected": body.league_ids}
     finally:
         conn.close()
+
+
+@router.post("/api/onboard/import/{league_id}")
+def onboard_import(league_id: str, request: Request):
+    """
+    Import one league family synchronously (~30-60s). The frontend calls
+    this once per selected league, in sequence, showing progress per league.
+    """
+    conn = _conn()
+    try:
+        uid = get_session_user(conn, request.cookies.get(SESSION_COOKIE))
+        if uid is None:
+            raise HTTPException(status_code=401, detail="Not signed in")
+        selected = conn.execute(
+            "SELECT 1 FROM user_leagues WHERE sleeper_user_id = ? AND league_id = ?",
+            (uid, league_id),
+        ).fetchone()
+        if not selected:
+            raise HTTPException(status_code=403, detail="League not in your selections")
+    finally:
+        conn.close()
+
+    result = run_import_sync(league_id)
+    if result["status"] == "error":
+        raise HTTPException(status_code=500, detail=result["detail"])
+    return result
 
 
 @router.get("/api/onboard/status")

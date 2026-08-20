@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api } from '@/lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -56,32 +56,31 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
     setError(null)
     try {
       await api.onboardLeagues(ids)
-      setState({ step: 'importing', leagueIds: ids })
     } catch {
-      setError('Could not start the import — try again.')
-    } finally {
+      setError('Could not save your selections — try again.')
       setBusy(false)
+      return
     }
-  }
-
-  // Poll import progress
-  useEffect(() => {
-    if (state.step !== 'importing') return
-    const t = setInterval(async () => {
+    setState({ step: 'importing', leagueIds: ids })
+    // Imports run synchronously server-side (~30-60s per league) — drive
+    // them one at a time so progress is honest and the server stays calm.
+    let failed = false
+    for (const id of ids) {
+      setStatuses(prev => ({ ...prev, [id]: { status: 'running', detail: 'importing…' } }))
       try {
-        const r = await api.onboardStatus()
-        setStatuses(r.leagues)
-        const mine = state.leagueIds.map(id => r.leagues[id]?.status)
-        if (mine.every(s => s === 'done')) {
-          clearInterval(t)
-          onDone()
-        }
+        const r = await api.onboardImport(id)
+        setStatuses(prev => ({ ...prev, [id]: r }))
       } catch (e) {
-        console.error(e)
+        failed = true
+        setStatuses(prev => ({
+          ...prev,
+          [id]: { status: 'error', detail: e instanceof Error ? e.message : 'failed' },
+        }))
       }
-    }, 2000)
-    return () => clearInterval(t)
-  }, [state, onDone])
+    }
+    setBusy(false)
+    if (!failed) onDone()
+  }
 
   return (
     <div className="min-h-[70vh] flex items-center justify-center px-4">

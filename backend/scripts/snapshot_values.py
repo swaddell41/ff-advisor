@@ -29,13 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 
 from app.db import get_connection, init_schema
-from app.ingestion.dynastyprocess import write_dynastyprocess_snapshots
-from app.ingestion.fantasycalc import write_fantasycalc_snapshots
-from app.ingestion.rosteraudit import (
-    RosterAuditClient,
-    write_pick_snapshots,
-    write_player_snapshots,
-)
+from app.snapshots import run_value_snapshots
 
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
@@ -47,93 +41,14 @@ logging.basicConfig(
 logger = logging.getLogger("snapshot")
 
 
-def get_format_keys(conn) -> list[str]:
-    """
-    Return all unique format_keys currently in the leagues table.
-
-    Falls back to ["sf_ppr"] if no leagues have been ingested yet, so
-    you can run snapshot_values.py before ingest_leagues.py if needed.
-    """
-    rows = conn.execute(
-        "SELECT DISTINCT format_key FROM leagues WHERE format_key IS NOT NULL"
-    ).fetchall()
-    if not rows:
-        logger.warning(
-            "No leagues found in DB — defaulting to sf_ppr. "
-            "Run ingest_leagues.py first for accurate format detection."
-        )
-        return ["sf_ppr"]
-    keys = [row["format_key"] for row in rows]
-    logger.info("Format keys to snapshot: %s", keys)
-    return keys
-
-
 def main() -> None:
-    today = datetime.now(timezone.utc).date()
-    logger.info("Snapshotting values for %s", today.isoformat())
-
+    logger.info("Snapshotting values…")
     conn = get_connection()
     init_schema(conn)
-    client = RosterAuditClient()
-
-    format_keys = get_format_keys(conn)
-
-    total_players = 0
-    total_picks = 0
-
-    # Fetch pick values once (they're the same regardless of format_key — the
-    # /picks endpoint returns all slots in both SF and 1QB formats).
-    logger.info("Fetching pick values from RosterAudit…")
-    pick_data = client.get_pick_values()
-    logger.info("Received %d pick entries from RosterAudit", len(pick_data))
-
-    for format_key in format_keys:
-        logger.info("Fetching player values for format_key=%s…", format_key)
-        player_values = client.get_player_values(format_key)
-        logger.info(
-            "format_key=%s: received values for %d players", format_key, len(player_values)
-        )
-
-        n_players = write_player_snapshots(conn, format_key, player_values, today)
-        total_players += n_players
-        logger.info(
-            "format_key=%s: wrote %d player snapshot rows", format_key, n_players
-        )
-
-        n_picks = write_pick_snapshots(conn, format_key, pick_data, today)
-        total_picks += n_picks
-        logger.info(
-            "format_key=%s: wrote %d pick snapshot rows", format_key, n_picks
-        )
-
-    # Market reference layer — FantasyCalc, normalized onto RosterAudit's
-    # scale. Runs after RA so the normalization has same-day RA rows.
-    logger.info("Fetching FantasyCalc market values…")
-    try:
-        fc_players, fc_picks = write_fantasycalc_snapshots(conn, format_keys, today)
-        logger.info("FantasyCalc: %d player rows, %d pick rows", fc_players, fc_picks)
-    except Exception as e:
-        logger.warning("FantasyCalc snapshot failed (non-fatal): %s", e)
-
-    # Expert-consensus reference layer — DynastyProcess (FantasyPros ECR).
-    logger.info("Fetching DynastyProcess expert-consensus values…")
-    try:
-        dp_players = write_dynastyprocess_snapshots(conn, format_keys, today)
-        logger.info("DynastyProcess: %d player rows", dp_players)
-    except Exception as e:
-        logger.warning("DynastyProcess snapshot failed (non-fatal): %s", e)
-
+    summary = run_value_snapshots(conn)
     conn.close()
-
-    logger.info(
-        "DONE — %d player rows, %d pick rows across %d format(s)",
-        total_players, total_picks, len(format_keys),
-    )
-    print(
-        f"\nSnapshot complete: {total_players} player values, "
-        f"{total_picks} pick values across {len(format_keys)} format(s) "
-        f"as of {today.isoformat()}"
-    )
+    logger.info("DONE — %s", summary)
+    print(f"\nSnapshot complete: {summary}")
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ import logging
 import os
 from datetime import date
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.acquire import acquisition_report
@@ -475,6 +475,27 @@ def post_refresh():
     try:
         summary = refresh_current_leagues(conn)
         return {**summary, **data_freshness(conn)}
+    finally:
+        conn.close()
+
+
+@router.get("/api/cron/daily")
+def cron_daily(request: Request):
+    """
+    Daily job for Vercel Cron: refresh league data, then snapshot values.
+    Protected by CRON_SECRET when set (Vercel sends it as a Bearer token).
+    """
+    secret = os.environ.get("CRON_SECRET")
+    if secret and request.headers.get("authorization") != f"Bearer {secret}":
+        raise HTTPException(status_code=401, detail="Bad cron secret")
+
+    from app.snapshots import run_value_snapshots
+
+    conn = _conn()
+    try:
+        refresh_summary = refresh_current_leagues(conn)
+        snapshot_summary = run_value_snapshots(conn)
+        return {"refresh": refresh_summary, "snapshots": snapshot_summary}
     finally:
         conn.close()
 

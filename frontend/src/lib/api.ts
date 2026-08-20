@@ -533,10 +533,15 @@ export const api = {
   logout: () => apiFetch<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
 
   onboardLeagues: (leagueIds: string[]) =>
-    apiFetch<{ selected: string[]; imports_started: string[] }>('/api/onboard/leagues', {
+    apiFetch<{ selected: string[] }>('/api/onboard/leagues', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ league_ids: leagueIds }),
+    }),
+
+  onboardImport: (leagueId: string) =>
+    apiFetch<{ status: string; detail: string | null }>(`/api/onboard/import/${leagueId}`, {
+      method: 'POST',
     }),
 
   onboardStatus: () =>

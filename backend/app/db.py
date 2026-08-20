@@ -1,20 +1,55 @@
 """
-SQLite connection and schema management.
+Database connection and schema management — dual backend.
 
-Design principles:
-- Single module owns all DB access: connection, schema creation, and a thin
-  execute/fetchall wrapper.
-- Schema is created idempotently (CREATE TABLE IF NOT EXISTS) — safe to call
-  on every startup.
-- No ORM. Callers pass SQL strings and parameters directly.
+- SQLite (default): local dev, tests, the original single-user setup.
+- Postgres (when DATABASE_URL is set): production on Vercel + Neon.
+
+The Postgres path is a thin facade that keeps the sqlite3 calling
+convention every module already uses — conn.execute("... ?", params),
+row["col"] and row[0], executescript, commit/close — and translates
+dialect differences at execute time:
+
+  ?                    → %s          (with % escaped when params exist)
+  INSERT OR REPLACE    → INSERT ... ON CONFLICT (pk) DO UPDATE (via PK map)
+  INSERT OR IGNORE     → INSERT ... ON CONFLICT DO NOTHING
+  PRAGMA ...           → no-op
+  AUTOINCREMENT / DATE / TIMESTAMP  → BIGSERIAL / TEXT / TEXT (DDL only)
+
+Dates and datetimes in params are stringified to ISO so Postgres TEXT
+columns behave byte-identically to SQLite's storage. No other module
+should ever know which backend is live.
 """
 
 import os
+import re
 import sqlite3
+from datetime import date, datetime
 from pathlib import Path
 
 # Default DB path relative to the project root; overridable via DB_PATH env var.
 _DEFAULT_DB_PATH = Path(__file__).parent.parent.parent / "data" / "dynasty.db"
+
+# Primary keys per table — used to translate INSERT OR REPLACE into
+# Postgres ON CONFLICT upserts. Keep in sync with the schema below.
+TABLE_PKS: dict[str, list[str]] = {
+    "sleeper_cache": ["url"],
+    "leagues": ["id"],
+    "managers": ["user_id"],
+    "league_managers": ["league_id", "user_id"],
+    "players": ["sleeper_id"],
+    "trades": ["id"],
+    "trade_sides": ["trade_id", "roster_id"],
+    "trade_assets": ["id"],
+    "value_snapshots": ["player_id", "source", "format", "snapshot_date"],
+    "pick_value_snapshots": ["season", "round", "source", "format", "snapshot_date"],
+    "roster_players": ["league_id", "user_id", "player_id"],
+    "user_posture_overrides": ["user_id", "league_id"],
+    "scouting_reports": ["user_id", "league_id"],
+    "trade_grades": ["trade_id", "side_roster_id", "grade_type"],
+    "app_users": ["sleeper_user_id"],
+    "sessions": ["token"],
+    "user_leagues": ["sleeper_user_id", "league_id"],
+}
 
 
 def get_db_path() -> Path:
@@ -22,11 +57,125 @@ def get_db_path() -> Path:
     return Path(raw)
 
 
-def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
+def using_postgres() -> bool:
+    return bool(os.environ.get("DATABASE_URL"))
+
+
+# ---------------------------------------------------------------------------
+# Postgres facade
+# ---------------------------------------------------------------------------
+
+_OR_REPLACE_RE = re.compile(
+    r"INSERT\s+OR\s+REPLACE\s+INTO\s+(\w+)\s*\(([^)]*)\)", re.IGNORECASE
+)
+_OR_IGNORE_RE = re.compile(r"INSERT\s+OR\s+IGNORE\s+INTO", re.IGNORECASE)
+
+
+def _pg_translate(sql: str, has_params: bool) -> str | None:
+    """Translate one sqlite-dialect statement to Postgres. None = skip."""
+    stripped = sql.lstrip()
+    if stripped.upper().startswith("PRAGMA"):
+        return None
+
+    m = _OR_REPLACE_RE.search(sql)
+    if m:
+        table = m.group(1)
+        cols = [c.strip() for c in m.group(2).split(",")]
+        pks = TABLE_PKS.get(table)
+        if pks is None:
+            raise ValueError(f"INSERT OR REPLACE into unknown table {table}")
+        non_pk = [c for c in cols if c not in pks]
+        sql = _OR_REPLACE_RE.sub(f"INSERT INTO {table} ({', '.join(cols)})", sql, count=1)
+        if non_pk:
+            conflict = (
+                f" ON CONFLICT ({', '.join(pks)}) DO UPDATE SET "
+                + ", ".join(f"{c} = EXCLUDED.{c}" for c in non_pk)
+            )
+        else:
+            conflict = f" ON CONFLICT ({', '.join(pks)}) DO NOTHING"
+        sql = sql.rstrip().rstrip(";") + conflict
+
+    if _OR_IGNORE_RE.search(sql):
+        sql = _OR_IGNORE_RE.sub("INSERT INTO", sql)
+        sql = sql.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+
+    if has_params:
+        sql = sql.replace("%", "%%").replace("?", "%s")
+    return sql
+
+
+class PgConnection:
+    """sqlite3.Connection-shaped facade over psycopg2."""
+
+    def __init__(self, dsn: str) -> None:
+        import psycopg2
+        import psycopg2.extras
+
+        self._conn = psycopg2.connect(dsn, cursor_factory=psycopg2.extras.DictCursor)
+        self.row_factory = None  # compat no-op; assignments are ignored
+
+    def execute(self, sql: str, params: tuple | list = ()):
+        translated = _pg_translate(sql, has_params=bool(params))
+        if translated is None:  # PRAGMA etc.
+            return _NullCursor()
+        cur = self._conn.cursor()
+        # psycopg2 interprets % formatting whenever vars is not None — even
+        # an empty list — so only pass params when there are some.
+        cur.execute(translated, [_adapt_param(p) for p in params] if params else None)
+        return cur
+
+    def executescript(self, script: str):
+        cur = self._conn.cursor()
+        for stmt in _split_statements(_pg_translate_ddl(script)):
+            cur.execute(stmt)
+        self._conn.commit()
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+class _NullCursor:
+    def fetchone(self):
+        return None
+
+    def fetchall(self):
+        return []
+
+
+def _adapt_param(p):
+    if isinstance(p, (date, datetime)):
+        return p.isoformat()
+    return p
+
+
+def _split_statements(script: str) -> list[str]:
+    # Strip -- comments first: they can legally contain semicolons, which
+    # would break the naive split. Our DDL has no string literals with '--'.
+    uncommented = "\n".join(line.split("--", 1)[0] for line in script.splitlines())
+    return [s.strip() for s in uncommented.split(";") if s.strip()]
+
+
+def _pg_translate_ddl(script: str) -> str:
+    script = script.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
+    # Store dates/timestamps as TEXT so behavior matches SQLite exactly —
+    # the app parses ISO strings in Python everywhere.
+    script = re.sub(r"\bTIMESTAMP\b", "TEXT", script)
+    script = re.sub(r"\bDATE\b", "TEXT", script)
+    return script
+
+
+def get_connection(db_path: Path | None = None):
     """
-    Open and return a sqlite3 connection with row_factory set to Row so
-    callers get dict-like rows. WAL mode for better concurrent read performance.
+    SQLite connection (row_factory=Row, WAL) by default; a PgConnection
+    facade when DATABASE_URL is set. Callers can't tell the difference.
     """
+    dsn = os.environ.get("DATABASE_URL")
+    if dsn:
+        return PgConnection(dsn)
+
     path = db_path or get_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     # No detect_types — timestamps are stored as ISO 8601 strings with timezone

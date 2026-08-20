@@ -1,0 +1,7 @@
+data/
+backend/tests/
+backend/ff_advisor_backend.egg-info/
+frontend/node_modules/
+*.png
+*.zip
+.env
