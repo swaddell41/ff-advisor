@@ -36,6 +36,10 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    # The Chrome extension's side panel (chrome-extension:// origin) and
+    # local extension testing. Extension fetches with host_permissions
+    # bypass CORS anyway; this keeps standalone/panel testing honest.
+    allow_origin_regex=r"chrome-extension://.*|http://localhost:\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

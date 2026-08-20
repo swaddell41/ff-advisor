@@ -49,6 +49,7 @@ TABLE_PKS: dict[str, list[str]] = {
     "app_users": ["sleeper_user_id"],
     "sessions": ["token"],
     "user_leagues": ["sleeper_user_id", "league_id"],
+    "adp_snapshots": ["player_id", "source", "format", "snapshot_date"],
 }
 
 
@@ -392,6 +393,17 @@ def init_schema(conn: sqlite3.Connection) -> None:
             sleeper_user_id TEXT NOT NULL,
             league_id       TEXT NOT NULL,
             PRIMARY KEY (sleeper_user_id, league_id)
+        );
+
+        -- Average draft position (redraft), from FantasyCalc. Powers the
+        -- draft assistant's "value falling to you" indicator.
+        CREATE TABLE IF NOT EXISTS adp_snapshots (
+            player_id     TEXT NOT NULL,
+            source        TEXT NOT NULL,
+            format        TEXT NOT NULL,
+            snapshot_date TEXT NOT NULL,
+            adp           REAL NOT NULL,
+            PRIMARY KEY (player_id, source, format, snapshot_date)
         );
 
         -- grade_type: 'decision' | 'outcome'

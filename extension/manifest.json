@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Dynasty Advisor — Draft Assistant",
+  "version": "0.1.0",
+  "description": "Live draft board for Sleeper drafts: multi-source values, tier breaks, roster needs, and falling-value alerts.",
+  "permissions": ["sidePanel", "storage"],
+  "host_permissions": [
+    "https://api.sleeper.app/*",
+    "https://ff-advisor-sam-waddells-projects.vercel.app/*"
+  ],
+  "side_panel": { "default_path": "panel.html" },
+  "action": { "default_title": "Open draft assistant" },
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://sleeper.com/draft/*"],
+      "js": ["content.js"]
+    }
+  ],
+  "icons": {}
+}

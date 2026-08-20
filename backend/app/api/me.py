@@ -451,6 +451,28 @@ def get_acquisition_report(league_id: str, position: str):
 
 
 # ---------------------------------------------------------------------------
+# Draft board (for the Chrome extension draft assistant)
+# ---------------------------------------------------------------------------
+
+@router.get("/api/draftboard")
+def get_draftboard(format: str = "sf_ppr", mode: str = "redraft"):
+    """
+    Ranked player board with values, ADP, and tier breaks. Unauthenticated
+    by design — it's pure public value data, and the extension may run
+    before the user has signed in.
+    """
+    from app.draftboard import draft_board
+
+    if mode not in ("redraft", "dynasty"):
+        raise HTTPException(status_code=400, detail="mode must be redraft|dynasty")
+    conn = _conn()
+    try:
+        return draft_board(conn, fmt=format, mode=mode)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Player card (identity + values + news)
 # ---------------------------------------------------------------------------
 

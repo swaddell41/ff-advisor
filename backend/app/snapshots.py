@@ -28,7 +28,11 @@ def get_format_keys(conn: Connection) -> list[str]:
     rows = conn.execute(
         "SELECT DISTINCT format_key FROM leagues WHERE format_key IS NOT NULL"
     ).fetchall()
-    return [r["format_key"] for r in rows] or ["sf_ppr"]
+    keys = {r["format_key"] for r in rows}
+    # Baselines the draft assistant needs even when no imported league uses
+    # them — an arbitrary Sleeper draft can be superflex or 1QB.
+    keys.update({"sf_ppr", "1qb_ppr"})
+    return sorted(keys)
 
 
 def run_value_snapshots(conn: Connection) -> dict:

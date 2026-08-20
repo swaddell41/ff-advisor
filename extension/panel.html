@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Draft Assistant</title>
+  <link rel="stylesheet" href="panel.css" />
+</head>
+<body>
+  <header>
+    <div class="row">
+      <strong>Draft Assistant</strong>
+      <span id="status" class="muted">not connected</span>
+    </div>
+    <div class="row" id="setup">
+      <input id="draft-input" placeholder="Sleeper draft ID or URL" />
+      <button id="connect">Connect</button>
+    </div>
+    <div class="row">
+      <input id="username-input" placeholder="your Sleeper username (for roster tracking)" />
+      <button id="save-user">Save</button>
+    </div>
+    <div class="row" id="meta" hidden>
+      <span id="draft-meta" class="muted"></span>
+      <label class="muted"><input type="checkbox" id="mode-toggle" /> dynasty values</label>
+    </div>
+  </header>
+
+  <div id="my-roster" hidden>
+    <div class="section-title">Your picks <span id="needs" class="muted"></span></div>
+    <div id="my-picks" class="chips"></div>
+  </div>
+
+  <nav id="tabs">
+    <button data-pos="ALL" class="active">All</button>
+    <button data-pos="QB">QB</button>
+    <button data-pos="RB">RB</button>
+    <button data-pos="WR">WR</button>
+    <button data-pos="TE">TE</button>
+  </nav>
+
+  <main id="board">
+    <p class="muted pad">Connect to a draft — open a Sleeper draft room and this fills in automatically, or paste the draft URL above.</p>
+  </main>
+
+  <footer class="muted">
+    Values: RosterAudit · FantasyCalc (redraft/market) · updated daily
+  </footer>
+
+  <script src="panel.js"></script>
+</body>
+</html>

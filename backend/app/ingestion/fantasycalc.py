@@ -100,6 +100,10 @@ def write_fantasycalc_snapshots(
         entries = data_by_qbs[num_qbs]
 
         fc_players: dict[str, float] = {}
+        # Redraft values + ADP ride along in the same payload — the draft
+        # assistant needs both (dynasty values are wrong for redraft drafts).
+        fc_redraft: dict[str, float] = {}
+        fc_adp: dict[str, float] = {}
         # (season, round) → {"early": v, "mid": v, "late": v}
         fc_picks: dict[tuple[int, int], dict[str, float]] = {}
 
@@ -118,6 +122,10 @@ def write_fantasycalc_snapshots(
                 sid = p.get("sleeperId")
                 if sid:
                     fc_players[str(sid)] = value
+                    if e.get("redraftValue"):
+                        fc_redraft[str(sid)] = e["redraftValue"]
+                    if e.get("maybeAdp"):
+                        fc_adp[str(sid)] = e["maybeAdp"]
 
         factor = _normalization_factor(conn, fmt, d_iso, fc_players)
 
@@ -128,6 +136,20 @@ def write_fantasycalc_snapshots(
                 (sid, SOURCE_NAME, fmt, d_iso, round(value * factor)),
             )
             total_players += 1
+
+        # Redraft values stored RAW (own scale — only compared to each other)
+        for sid, value in fc_redraft.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO value_snapshots (player_id, source, format, snapshot_date, value) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (sid, "fc_redraft", fmt, d_iso, round(value)),
+            )
+        for sid, adp in fc_adp.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO adp_snapshots (player_id, source, format, snapshot_date, adp) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (sid, SOURCE_NAME, fmt, d_iso, round(adp, 1)),
+            )
 
         for (season, rnd), slots in fc_picks.items():
             mid = slots.get("mid")
