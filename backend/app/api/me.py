@@ -245,7 +245,9 @@ def _extract_bias_highlights(pos_biases: dict, age_biases: dict) -> list[dict]:
 
 
 def _build_recent_trades(conn, trades: list[dict]) -> list[dict]:
-    """Enrich recent trades with league name and asset names."""
+    """Enrich recent trades with league name, asset names, and lens grades."""
+    from app.multi_grade import lens_grades
+
     result = []
     for t in trades:
         league_row = conn.execute(
@@ -256,6 +258,7 @@ def _build_recent_trades(conn, trades: list[dict]) -> list[dict]:
         given_names = _asset_labels(t["assets_given"])
 
         result.append({
+            "lenses": lens_grades(conn, t["trade_id"], t["roster_id"]),
             "trade_id": t["trade_id"],
             "league_id": t["league_id"],
             "league_name": league_row["name"] if league_row else t["league_id"],

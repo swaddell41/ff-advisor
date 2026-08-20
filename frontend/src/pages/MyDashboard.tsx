@@ -53,6 +53,35 @@ function BiasCard({ highlight }: { highlight: BiasHighlight }) {
 }
 
 // ── Recent trade row ──────────────────────────────────────────────────────────
+const LENS_LABELS: Record<string, string> = { ours: 'ours', market: 'mkt', experts: 'exp' }
+const LENS_TITLES: Record<string, string> = {
+  ours: 'RosterAudit (our pricing model)',
+  market: 'FantasyCalc — real completed trades',
+  experts: 'DynastyProcess — expert consensus (picks priced at our values)',
+}
+
+function LensChip({ lens, grades }: { lens: string; grades: { decision: import('@/lib/api').LensGrade | null; outcome: import('@/lib/api').LensGrade | null } }) {
+  const d = grades.decision
+  const o = grades.outcome
+  if (!d && !o) return null
+  const shown = d ?? o!
+  const title = [
+    LENS_TITLES[lens],
+    d ? `At the time: ${d.letter} (${d.pct > 0 ? '+' : ''}${Math.round(d.pct * 100)}%)${d.estimated ? ' — estimated, no price history that far back' : ''}` : null,
+    o ? `Today: ${o.letter} (${o.pct > 0 ? '+' : ''}${Math.round(o.pct * 100)}%)` : null,
+  ].filter(Boolean).join(' · ')
+  return (
+    <span
+      title={title}
+      className={cn('text-xs font-mono px-1 py-0.5 rounded border inline-flex items-center gap-0.5', gradeBadgeVariant(shown.letter))}
+    >
+      <span className="opacity-60 text-[9px]">{LENS_LABELS[lens]}</span>
+      {shown.letter}
+      {d?.estimated && <span className="opacity-60">~</span>}
+    </span>
+  )
+}
+
 function RecentTradeRow({ trade }: { trade: RecentTrade }) {
   const navigate = useNavigate()
   const diffColor = trade.decision_differential > 0
@@ -61,14 +90,39 @@ function RecentTradeRow({ trade }: { trade: RecentTrade }) {
     ? 'text-red-400'
     : 'text-muted-foreground'
 
+  const lensEntries = trade.lenses
+    ? (['ours', 'market', 'experts'] as const).filter(k => trade.lenses![k])
+    : []
+  const letters = lensEntries
+    .map(k => trade.lenses![k].decision?.letter)
+    .filter(Boolean) as string[]
+  const disagree =
+    letters.length > 1 &&
+    letters.some(l => l.startsWith('A') || l.startsWith('B')) &&
+    letters.some(l => l === 'D' || l === 'F')
+
   return (
     <button
       onClick={() => navigate(`/trades/${trade.trade_id}`)}
       className="w-full text-left flex items-center gap-3 py-2.5 px-3 rounded-lg hover:bg-muted/30 transition-colors cursor-pointer"
     >
-      {/* Grades */}
+      {/* Grades — one chip per lens */}
       <div className="flex items-center gap-1 shrink-0">
-        {trade.decision_grade ? (
+        {lensEntries.length > 0 ? (
+          <>
+            {lensEntries.map(k => (
+              <LensChip key={k} lens={k} grades={trade.lenses![k]} />
+            ))}
+            {disagree && (
+              <span
+                className="text-xs"
+                title="Sources disagree sharply on this trade — it likely hinges on a contested player. The F and the win can both be 'right' depending on whose prices you believe."
+              >
+                ⚖️
+              </span>
+            )}
+          </>
+        ) : trade.decision_grade ? (
           <span className={cn('text-xs font-mono font-semibold px-1.5 py-0.5 rounded border', gradeBadgeVariant(trade.decision_grade))}>
             {trade.decision_grade}
           </span>

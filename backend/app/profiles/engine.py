@@ -278,7 +278,7 @@ def _get_manager_trades(
         received = conn.execute(
             """
             SELECT ta.asset_type, ta.player_id, ta.pick_season, ta.pick_round,
-                   p.position, p.birth_date
+                   p.position, p.birth_date, p.full_name
             FROM trade_assets ta
             LEFT JOIN players p ON p.sleeper_id = ta.player_id
             WHERE ta.trade_id = ? AND ta.to_roster_id = ?
@@ -290,7 +290,7 @@ def _get_manager_trades(
         given = conn.execute(
             """
             SELECT ta.asset_type, ta.player_id, ta.pick_season, ta.pick_round,
-                   p.position, p.birth_date
+                   p.position, p.birth_date, p.full_name
             FROM trade_assets ta
             LEFT JOIN players p ON p.sleeper_id = ta.player_id
             WHERE ta.trade_id = ? AND ta.from_roster_id = ?

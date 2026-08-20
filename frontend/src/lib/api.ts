@@ -79,6 +79,14 @@ export interface BiasHighlight {
   direction: string
 }
 
+export interface LensGrade {
+  letter: string
+  pct: number
+  received: number
+  given: number
+  estimated: boolean
+}
+
 export interface RecentTrade {
   trade_id: string
   league_id: string
@@ -91,6 +99,7 @@ export interface RecentTrade {
   decision_differential: number
   assets_received: string[]
   assets_given: string[]
+  lenses?: Record<string, { decision: LensGrade | null; outcome: LensGrade | null }>
 }
 
 export interface LeagueSummaryForDashboard {
