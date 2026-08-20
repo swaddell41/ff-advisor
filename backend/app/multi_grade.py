@@ -79,6 +79,25 @@ class SnapshotValueSource:
         return (row["mid_value"], True) if row else (None, False)
 
 
+def _has_played(conn: Connection, player_id: str, cache: dict) -> bool:
+    """
+    True once the player has an actual NFL sample (Sleeper years_exp > 0,
+    refreshed weekly — flips automatically after their rookie season).
+    """
+    if player_id in cache:
+        return cache[player_id]
+    row = conn.execute(
+        "SELECT raw_json FROM players WHERE sleeper_id = ?", (player_id,)
+    ).fetchone()
+    played = False
+    if row and row["raw_json"]:
+        import json
+        years_exp = json.loads(row["raw_json"]).get("years_exp")
+        played = bool(years_exp and years_exp > 0)
+    cache[player_id] = played
+    return played
+
+
 def _value_assets(
     conn: Connection,
     trade_id: str,
@@ -88,13 +107,18 @@ def _value_assets(
     as_of: date,
     source: SnapshotValueSource,
     resolver: PickResolutionContext | None,
-) -> tuple[int, bool, bool]:
+    played_cache: dict,
+) -> tuple[int, bool, bool, bool]:
     """
     Sum one side's asset values. When a resolver is given (outcome pass),
     picks whose draft has already happened are valued as the PLAYER actually
-    selected with them — real hindsight, not generic pick value.
+    selected with them.
 
-    Returns (total, used_fallback, any_pick_realized).
+    Realized is only claimed as hindsight when that player has actually
+    played NFL games — a pick that became an unplayed rookie is still
+    speculation, and is reported as provisional instead.
+
+    Returns (total, used_fallback, any_pick_realized, any_pick_provisional).
     """
     col = "to_roster_id" if direction == "received" else "from_roster_id"
     rows = conn.execute(
@@ -107,6 +131,7 @@ def _value_assets(
     total = 0
     used_fallback = False
     realized = False
+    provisional = False
 
     for row in rows:
         if row["asset_type"] == "player":
@@ -126,14 +151,17 @@ def _value_assets(
                 if val is not None:
                     total += val
                     used_fallback = used_fallback or fb
-                    realized = True
+                    if _has_played(conn, pid, played_cache):
+                        realized = True
+                    else:
+                        provisional = True
                     continue
         val, fb = source.get_pick_value(row["pick_season"], row["pick_round"], fmt, as_of)
         if val is not None:
             total += val
             used_fallback = used_fallback or fb
 
-    return total, used_fallback, realized
+    return total, used_fallback, realized, provisional
 
 
 def lens_grades(
@@ -165,6 +193,7 @@ def lens_grades(
     if resolver is None:
         resolver = PickResolutionContext(conn, trade_row["league_id"])
 
+    played_cache: dict = {}
     out: dict[str, dict] = {}
     for key, source_name, pick_source in LENSES:
         source = SnapshotValueSource(conn, source_name, pick_source)
@@ -173,11 +202,11 @@ def lens_grades(
             # Decision = what was knowable then (generic pick values).
             # Outcome = hindsight (conveyed picks become the drafted player).
             res = resolver if grade_type == "outcome" else None
-            received, fb_r, real_r = _value_assets(
-                conn, trade_id, roster_id, "received", fmt, as_of, source, res
+            received, fb_r, real_r, prov_r = _value_assets(
+                conn, trade_id, roster_id, "received", fmt, as_of, source, res, played_cache
             )
-            given, fb_g, real_g = _value_assets(
-                conn, trade_id, roster_id, "given", fmt, as_of, source, res
+            given, fb_g, real_g, prov_g = _value_assets(
+                conn, trade_id, roster_id, "given", fmt, as_of, source, res, played_cache
             )
             if received == 0 and given == 0:
                 lens[grade_type] = None
@@ -193,6 +222,9 @@ def lens_grades(
                 # grades can be backfilled estimates.
                 "estimated": (fb_r or fb_g) if grade_type == "decision" else False,
                 "realized": (real_r or real_g) if grade_type == "outcome" else False,
+                # A pick that became a rookie who hasn't played is NOT
+                # hindsight yet — the verdict is provisional.
+                "provisional": (prov_r or prov_g) if grade_type == "outcome" else False,
             }
         out[key] = lens
     return out

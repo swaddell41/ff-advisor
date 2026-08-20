@@ -68,10 +68,15 @@ function LensChip({ lens, grades }: { lens: string; grades: { decision: import('
   // the journey (decision→outcome) when the grade has moved.
   const current = o ?? d!
   const moved = d && o && d.letter !== o.letter
+  const outcomeNote = o?.provisional
+    ? ' — picks valued as the rookies drafted with them, who haven\'t played an NFL game yet: still speculation, not a verdict'
+    : o?.realized
+      ? ' — conveyed picks valued as the players drafted with them (who have real NFL samples)'
+      : ''
   const title = [
     LENS_TITLES[lens],
     d ? `At the time: ${d.letter} (${d.pct > 0 ? '+' : ''}${Math.round(d.pct * 100)}%)${d.estimated ? ' — estimated, no price history that far back' : ''}` : null,
-    o ? `Today: ${o.letter} (${o.pct > 0 ? '+' : ''}${Math.round(o.pct * 100)}%)${o.realized ? ' — conveyed picks valued as the players drafted with them' : ''}` : null,
+    o ? `Today: ${o.letter} (${o.pct > 0 ? '+' : ''}${Math.round(o.pct * 100)}%)${outcomeNote}` : null,
     'Outcome grades move as values change — a contested buy that hits will climb over time.',
   ].filter(Boolean).join(' · ')
   return (
@@ -82,7 +87,11 @@ function LensChip({ lens, grades }: { lens: string; grades: { decision: import('
       <span className="opacity-60 text-[9px]">{LENS_LABELS[lens]}</span>
       {moved ? `${d!.letter}→${o!.letter}` : current.letter}
       {d?.estimated && <span className="opacity-60">~</span>}
-      {o?.realized && <span className="opacity-60" title="Conveyed picks valued as the players drafted with them">•</span>}
+      {o?.provisional ? (
+        <span className="opacity-60" title="Picks became rookies who haven't played yet — this outcome is still speculative">◌</span>
+      ) : o?.realized ? (
+        <span className="opacity-60" title="Conveyed picks valued as the players drafted with them">•</span>
+      ) : null}
     </span>
   )
 }
