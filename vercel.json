@@ -2,8 +2,8 @@
   "buildCommand": "cd frontend && npm install && npm run build",
   "outputDirectory": "frontend/dist",
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index" },
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    { "source": "/api/(.*)", "destination": "/api/index?__path=api/$1" },
+    { "source": "/((?!api/)(?!assets/)[^.]*)", "destination": "/index.html" }
   ],
   "functions": {
     "api/index.py": { "maxDuration": 300 }
