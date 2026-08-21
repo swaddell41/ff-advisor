@@ -577,17 +577,35 @@
         (flexOpen > 0 && (pos === 'RB' || pos === 'WR' || (pos === 'TE' && !teFilled)));
     }
 
+    // Two scoring regimes — starter value and bench value are different
+    // quantities:
+    //   STARTERS PHASE: value over replacement (VBD) — how much better than
+    //     the free alternative at the slot you'd start him in.
+    //   BENCH PHASE: ceiling — late market value proxies upside for RB/WR
+    //     lottery tickets (their VORP is ~0 by definition, which is exactly
+    //     why VORP is the wrong currency here). Spare QBs/TEs are insurance,
+    //     worth a small fraction, which naturally schedules them into the
+    //     final rounds next to K/DST — where best practice puts them.
+    const benchPhase = C && L && !startersOpen;
     const cands = [];
     for (const p of state.allPlayers) {
       if (state.pickedIds.has(String(p.player_id))) continue;
-      let repl = (state.repl && state.repl[p.position]) || 0;
-      if (p.position === 'TE' && teFilled && state.repl) {
-        repl = Math.max(repl, state.repl.RB || 0, state.repl.WR || 0);
+      let score;
+      if (benchPhase) {
+        const spareQB = p.position === 'QB' && (C.QB || 0) >= (L.qb + L.sf);
+        const spareTE = p.position === 'TE' && teFilled;
+        score = (spareQB || spareTE)
+          ? p.value * 0.12
+          : p.value * needMult(p.position);
+      } else {
+        let repl = (state.repl && state.repl[p.position]) || 0;
+        if (p.position === 'TE' && teFilled && state.repl) {
+          repl = Math.max(repl, state.repl.RB || 0, state.repl.WR || 0);
+        }
+        const vorp = Math.max(0, p.value - repl);
+        score = (vorp + p.value * 0.03) * needMult(p.position);
+        if (startersOpen && !canStart(p.position)) score *= 0.15;
       }
-      // VORP core + a whisper of raw value as tiebreak, need-weighted.
-      const vorp = Math.max(0, p.value - repl);
-      let score = (vorp + p.value * 0.03) * needMult(p.position);
-      if (startersOpen && !canStart(p.position)) score *= 0.15;
       cands.push({ p, score });
     }
     cands.sort((a, b) => b.score - a.score);
