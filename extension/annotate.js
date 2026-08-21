@@ -147,7 +147,6 @@
     }
     .ffa-badge.ffa-overlay {
       position: absolute;
-      right: 2px;
       top: 50%;
       transform: translateY(-50%);
       margin-left: 0;
@@ -189,16 +188,28 @@
     parent.insertBefore(b, textNode.nextSibling);
 
     // If an ellipsizing ancestor is (now) truncating, take the badge out of
-    // the text flow: overlay it at that ancestor's right edge instead, so
-    // the site's name text renders at full length.
+    // the text flow entirely and park it in the gutter JUST PAST that
+    // cell's right edge — over the column boundary, not over the name.
+    // The badge must be hosted on a non-clipping ancestor (the row),
+    // because anything positioned beyond the cell edge inside the cell
+    // would be clipped by its overflow:hidden.
     let anc = textNode.parentElement;
     for (let i = 0; i < 3 && anc; i += 1, anc = anc.parentElement) {
       const cs = getComputedStyle(anc);
       const clips = cs.textOverflow === 'ellipsis' || cs.overflow === 'hidden' || cs.overflowX === 'hidden';
       if (clips && anc.scrollWidth > anc.clientWidth + 1) {
+        let host = anc.parentElement || anc;
+        for (let j = 0; j < 2 && host.parentElement; j += 1) {
+          const hcs = getComputedStyle(host);
+          if (hcs.overflow !== 'hidden' && hcs.overflowX !== 'hidden') break;
+          host = host.parentElement;
+        }
+        if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
         b.classList.add('ffa-overlay');
-        if (getComputedStyle(anc).position === 'static') anc.style.position = 'relative';
-        anc.appendChild(b);
+        host.appendChild(b);
+        const hostRect = host.getBoundingClientRect();
+        const cellRect = anc.getBoundingClientRect();
+        b.style.left = Math.round(cellRect.right - hostRect.left + 4) + 'px';
         break;
       }
     }
