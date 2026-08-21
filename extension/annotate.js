@@ -499,21 +499,98 @@
 
     if (!isExt) return;
     try {
+    state.draftType = 'snake';   // ESPN mocks and redraft leagues are snake
+
     const applyEspn = (d) => {
+      const teams = state.lineup.teams || 10;
+
+      // Phantom guard. The frame parser is heuristic and demonstrably
+      // records the occasional non-pick — a live capture had a 30000 (a
+      // pick-clock value) recorded as a player id, giving team 5 two picks
+      // in round 1. A team drafts at most once per round, so a repeated
+      // (team, round) is proof of a phantom.
+      //
+      // Resolve collisions in favour of the entry that MATCHES the board
+      // rather than the one that arrived first: the phantom often lands
+      // first, and naive first-wins dedupe would drop the real pick.
+      const bySlot = new Map();
+      const order = [];
+      for (const p of d.picks) {
+        const bp = state.byEspn.get(String(p.espn_id)) || null;
+        if (p.team_id == null || p.pick_no == null) { order.push({ p, bp }); continue; }
+        const key = `${p.team_id}|${p.pick_no}`;
+        const prev = bySlot.get(key);
+        if (!prev) {
+          const entry = { p, bp };
+          bySlot.set(key, entry);
+          order.push(entry);            // entry is mutated in place below,
+        } else if (!prev.bp && bp) {    // so `order` keeps arrival order
+          prev.p = p; prev.bp = bp;     // while upgrading phantom -> real
+        }
+      }
+
       state.pickedIds = new Set(
-        d.picks.map((p) => state.byEspn.get(String(p.espn_id)))
-          .filter(Boolean).map((p) => String(p.player_id))
+        order.filter((e) => e.bp).map((e) => String(e.bp.player_id))
       );
+
+      // Draft slot from round 1: teams pick in slot order and the picks
+      // array preserves arrival order, so the Nth distinct team to pick in
+      // round 1 holds slot N.
+      //
+      // Only trust it once round 1 is exactly complete. This doubles as a
+      // check on our reading of the protocol: pick_no LOOKS like the round
+      // (every early pick reported 1, every round-10 pick reported 10), but
+      // that is inferred, not confirmed against a SELECTED frame. If it is
+      // really an overall pick number this filter yields one entry, the
+      // guard fails, and we fall back to the value-order model instead of
+      // seating every team wrongly and skewing every lookahead number.
+      const r1 = order.filter((e) => String(e.p.pick_no) === '1' && e.p.team_id != null)
+        .map((e) => String(e.p.team_id));
+      const r1uniq = [...new Set(r1)];
+      const seated = r1.length === teams && r1uniq.length === teams;
+
+      if (seated) {
+        const slotOf = new Map(r1uniq.map((t, i) => [t, i + 1]));
+        const mine = slotOf.get(String(d.myTeamId));
+        state.mySlot = mine || null;
+
+        // Every team's roster keyed by draft slot — this is what the run
+        // model consumes (simulateRoom / worstCaseAtNext). Until now ESPN
+        // left it null and silently fell back to expectedNextBest, which
+        // has no run awareness at all.
+        const slotCounts = {};
+        for (const e of order) {
+          if (!e.bp || !e.bp.position || e.p.team_id == null) continue;
+          const slot = slotOf.get(String(e.p.team_id));
+          if (!slot) continue;
+          (slotCounts[slot] = slotCounts[slot] || {})[e.bp.position] =
+            (slotCounts[slot][e.bp.position] || 0) + 1;
+        }
+        state.slotCounts = slotCounts;
+      } else {
+        state.mySlot = null;
+        state.slotCounts = null;
+      }
+
       if (d.myTeamId) {
         const counts = {};
-        for (const p of d.picks) {
-          if (p.team_id !== String(d.myTeamId)) continue;
-          const bp = state.byEspn.get(String(p.espn_id));
-          if (bp && bp.position) counts[bp.position] = (counts[bp.position] || 0) + 1;
+        let qbRound = null;
+        for (const e of order) {
+          if (String(e.p.team_id) !== String(d.myTeamId)) continue;
+          if (!e.bp || !e.bp.position) continue;
+          counts[e.bp.position] = (counts[e.bp.position] || 0) + 1;
+          if (e.bp.position === 'QB' && qbRound === null) qbRound = Number(e.p.pick_no) || null;
         }
         state.myCounts = counts;
+        // Mirrors the Sleeper path: a cheap/late QB1 justifies ONE upside
+        // backup, an early QB1 does not.
+        state.myQBLate = qbRound !== null && qbRound >= 8;
       }
-      setCurrentPick(d.picks.length + 1);
+
+      // Deduped count, not d.picks.length — the raw length includes
+      // phantoms, which was inflating currentPick and producing absurd
+      // falling-value deltas on the badges.
+      setCurrentPick(order.length + 1);
       recommend();
     };
     chrome.storage.local.get(['espnDraft'], (v) => {
