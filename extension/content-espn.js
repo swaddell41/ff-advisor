@@ -110,13 +110,14 @@
     Object.values(obj).forEach((v) => { if (v && typeof v === 'object') scanJson(v); });
   }
 
-  window.addEventListener('message', (ev) => {
-    const msg = ev.data;
-    if (!msg || msg.source !== 'ffa-espn' || msg.type !== 'ws-frame') return;
+  document.addEventListener('ffa-espn-frame', (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.detail); } catch (_) { return; }
+    if (!msg || typeof msg.data !== 'string') return;
     framesSeen += 1;
-    debugFrames.push(`${msg.direction} ${String(msg.data).slice(0, 300)}`);
+    debugFrames.push(`in ${msg.data.slice(0, 300)}`);
     if (debugFrames.length > 200) debugFrames.shift();
-    if (msg.direction === 'in') parseFrame(msg.data);
+    parseFrame(msg.data);
     publish();
   });
 

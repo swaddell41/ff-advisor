@@ -14,13 +14,18 @@
     if (window.__ffaWsTapInstalled) return;
     window.__ffaWsTapInstalled = true;
 
+    // Relay via a namespaced CustomEvent — NOT window.postMessage. ESPN's
+    // lobby and draft-room windows coordinate over postMessage, and foreign
+    // messages on that channel poison their handlers (undefined.pageName →
+    // React crash → blank page). CustomEvents with a custom name are
+    // invisible to 'message' listeners. Payload is a JSON string so it
+    // crosses the isolated-world boundary reliably.
     const relay = (url, data) => {
       try {
         if (typeof data !== 'string' || data.length > 4000) return;
-        window.postMessage(
-          { source: 'ffa-espn', type: 'ws-frame', direction: 'in', url: String(url || ''), data },
-          '*'
-        );
+        document.dispatchEvent(new CustomEvent('ffa-espn-frame', {
+          detail: JSON.stringify({ url: String(url || ''), data }),
+        }));
       } catch (_) { /* never break the page */ }
     };
 
