@@ -198,8 +198,15 @@ async function pollSleeper() {
     state.pickedIds = new Set(state.picks.map((p) => String(p.player_id)));
     const total = (state.draft.settings.teams || 0) * (state.draft.settings.rounds || 0);
     const st = state.draft.status;
+    const t = new Date();
+    const hh = String(t.getHours()).padStart(2, '0');
+    const mm = String(t.getMinutes()).padStart(2, '0');
+    const ss = String(t.getSeconds()).padStart(2, '0');
+    // The live heartbeat proves polling is alive even between picks.
     $('status').textContent =
-      `pick ${state.picks.length + 1}${total ? '/' + total : ''}` + (st && st !== 'drafting' ? ` · ${st}` : '');
+      `pick ${state.picks.length + 1}${total ? '/' + total : ''}` +
+      (st && st !== 'drafting' ? ` · ${st}` : '') +
+      ` · ✓ ${hh}:${mm}:${ss}`;
     render();
   } catch (e) {
     $('status').textContent = 'poll failed — retrying';
@@ -227,12 +234,20 @@ function updateEspn(espnDraft) {
   state.espn = espnDraft;
   refreshPickedIds();
   const n = espnDraft.picks.length;
+  const frames = espnDraft.framesSeen || 0;
   $('draft-meta').textContent =
     `ESPN${espnDraft.leagueId ? ' · league ' + espnDraft.leagueId : ''} · ${$('sf-toggle').checked ? 'SF' : '1QB'}`;
-  $('status').textContent =
-    `pick ${n + 1}` +
-    (state.espnUnmatched ? ` · ${state.espnUnmatched} unmatched` : '') +
-    (n === 0 ? ' · waiting for picks' : '');
+  // Diagnostic-rich status: distinguishes "socket tap sees nothing" from
+  // "frames arrive but the parser doesn't recognize picks".
+  let diag;
+  if (n > 0) {
+    diag = `pick ${n + 1}` + (state.espnUnmatched ? ` · ${state.espnUnmatched} unmatched` : '');
+  } else if (frames > 0) {
+    diag = `${frames} frames seen, no picks parsed yet — if picks have happened, copy debug frames`;
+  } else {
+    diag = 'connected · no draft traffic seen yet (refresh the ESPN tab if the draft already started)';
+  }
+  $('status').textContent = diag;
   render();
 }
 

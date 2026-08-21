@@ -12,11 +12,9 @@
  */
 
 (function () {
-  // Inject the page-context tap.
-  const s = document.createElement('script');
-  s.src = chrome.runtime.getURL('inject-espn.js');
-  s.onload = () => s.remove();
-  (document.head || document.documentElement).appendChild(s);
+  // The WebSocket tap (inject-espn.js) runs as a MAIN-world content script
+  // declared in the manifest — synchronously, before any page code, so
+  // sockets opened early are still wrapped.
 
   const params = new URLSearchParams(window.location.search);
   const leagueId = params.get('leagueId');
@@ -25,6 +23,7 @@
   const picks = [];               // [{espn_id, team_id, pick_no}]
   const seen = new Set();         // dedupe by espn_id
   const debugFrames = [];         // ring buffer of raw frames
+  let framesSeen = 0;             // total WS frames observed (diagnostic)
   let publishTimer = null;
 
   function publish() {
@@ -36,6 +35,7 @@
           leagueId,
           myTeamId,
           picks: picks.slice(),
+          framesSeen,
           updatedAt: Date.now(),
         },
         espnDebugFrames: debugFrames.slice(-80),
@@ -110,6 +110,7 @@
   window.addEventListener('message', (ev) => {
     const msg = ev.data;
     if (!msg || msg.source !== 'ffa-espn' || msg.type !== 'ws-frame') return;
+    framesSeen += 1;
     debugFrames.push(`${msg.direction} ${String(msg.data).slice(0, 300)}`);
     if (debugFrames.length > 200) debugFrames.shift();
     if (msg.direction === 'in') parseFrame(msg.data);

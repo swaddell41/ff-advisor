@@ -17,15 +17,17 @@
       "js": ["content.js"]
     },
     {
-      "matches": ["https://fantasy.espn.com/football/draft*"],
-      "js": ["content-espn.js"],
-      "run_at": "document_start"
-    }
-  ],
-  "web_accessible_resources": [
+      "matches": ["https://fantasy.espn.com/*draft*", "https://*.espn.com/*draft*"],
+      "js": ["inject-espn.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
     {
-      "resources": ["inject-espn.js"],
-      "matches": ["https://fantasy.espn.com/*"]
+      "matches": ["https://fantasy.espn.com/*draft*", "https://*.espn.com/*draft*"],
+      "js": ["content-espn.js"],
+      "run_at": "document_start",
+      "all_frames": true
     }
   ],
   "icons": {}

@@ -1,5 +1,6 @@
 /**
- * Runs in the PAGE context of ESPN draft rooms (injected by content-espn.js).
+ * Runs in the PAGE (MAIN world) context of ESPN draft rooms, declared as a
+ * world:"MAIN" content script so it executes before any page code.
  *
  * ESPN's draft room (league drafts and mocks alike) receives live picks over
  * a WebSocket with an undocumented text protocol. We can't read those frames
