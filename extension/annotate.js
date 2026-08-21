@@ -173,6 +173,15 @@
     // Rules in effect
     const rules = [];
     if (a.phase === 'filling starters') rules.push('players who can\'t fill an open starting slot are excluded');
+    if (a.phase === 'bench') {
+      if (a.teams >= 12) {
+        rules.push(`${a.teams}-team league: thinner waiver wire — one backup-QB dart allowed (insurance ×0.4)`);
+      } else if (a.myQBLate) {
+        rules.push('late-round QB1: one upside backup-QB dart allowed (insurance ×0.3)');
+      } else {
+        rules.push('QB2/TE2 held to ×0.12: this wire is rich enough to stream — bench spots go to RB/WR upside');
+      }
+    }
     if (a.teFilled) rules.push('TE slot filled — TE2s don\'t qualify for flex (their price is slot scarcity, not points)');
     if (a.usedGatedFallback) rules.push('NO eligible starter-fillers left on the board — showing held players as fallback');
     if (a.la && a.rosterAware) {
@@ -391,12 +400,19 @@
           state.slotCounts = slotCounts;
           if (state.myUserId) {
             const counts = {};
+            let qbRound = null;
             for (const p of picks || []) {
               if (String(p.picked_by) !== state.myUserId) continue;
               const pos = (p.metadata && p.metadata.position) || '?';
               counts[pos] = (counts[pos] || 0) + 1;
+              if (pos === 'QB' && qbRound === null) {
+                qbRound = Math.ceil((p.pick_no || 1) / (state.lineup.teams || 10));
+              }
             }
             state.myCounts = counts;
+            // A cheap/late QB1 justifies ONE upside backup ("pair a mid-tier
+            // QB1 with a high-upside dart"); an early QB1 doesn't.
+            state.myQBLate = qbRound !== null && qbRound >= 8;
           }
           setCurrentPick((picks || []).length + 1);
           recommend();
@@ -887,7 +903,15 @@
         const spareQB = p.position === 'QB' && (C.QB || 0) >= (L.qb + L.sf);
         const spareTE = p.position === 'TE' && teFilled;
         if (spareQB || spareTE) {
+          // Insurance weight. Research consensus: in 10-team 1QB leagues the
+          // QB/TE wire is rich — stream, don't roster (weight 0.12 ≈ never).
+          // Two evidence-backed exceptions, for the FIRST backup QB only:
+          // 12+-team leagues (wire thins out) and a late-round QB1 ("pair a
+          // cheap QB1 with an upside dart"). TE2 gets no exception.
           mult = 0.12;
+          const firstBackupQB = spareQB && (C.QB || 0) === (L.qb + L.sf);
+          if (firstBackupQB && L.teams >= 12) mult = 0.4;
+          else if (firstBackupQB && state.myQBLate) mult = 0.3;
           score = p.value * mult;
         } else {
           mult = needMult(p.position);
@@ -929,6 +953,8 @@
       repl: state.repl ? { ...state.repl } : null,
       teFilled: !!teFilled,
       rosterAware,
+      teams: L ? L.teams : null,
+      myQBLate: !!state.myQBLate,
       positions: ['RB', 'WR', 'TE', 'QB'].map((pos) => {
         const now = avail.find((p) => p.position === pos) || null;
         const nb = (la && nextBest[pos]) || null;
