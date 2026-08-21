@@ -224,8 +224,11 @@
         sf: s.slots_super_flex ?? 0,
       };
       computeReplacement();
-      // poll pick count for steal deltas
-      setInterval(async () => {
+      // Pick polling: a steady timer PLUS immediate refreshes when the page
+      // mutates (a pick removes rows instantly, so the DOM is our event
+      // source) — recommendations react within a beat of any pick.
+      const pollPicks = async () => {
+        lastPickPoll = Date.now();
         try {
           const picks = await xfetch(`${SLEEPER}/v1/draft/${m[1]}/picks`);
           state.pickedIds = new Set((picks || []).map((p) => String(p.player_id)));
@@ -241,7 +244,10 @@
           setCurrentPick((picks || []).length + 1);
           recommend();
         } catch (_) {}
-      }, 5000);
+      };
+      pickPollTrigger = pollPicks;
+      setInterval(pollPicks, 4000);
+      pollPicks();
     } catch (_) {}
   }
 
@@ -537,8 +543,12 @@
     }
   }
 
+  let pickPollTrigger = null;
+  let lastPickPoll = 0;
+
   let scanScheduled = false;
   function scheduleScan() {
+    if (pickPollTrigger && Date.now() - lastPickPoll > 1200) pickPollTrigger();
     if (scanScheduled) return;
     scanScheduled = true;
     setTimeout(() => {
