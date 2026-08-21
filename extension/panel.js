@@ -102,12 +102,30 @@ async function boot() {
     refreshPickedIds();
     render();
   });
+  // One click, everything. Which DevTools window happens to be open should
+  // never decide whether a bug can be diagnosed: the page console has no
+  // chrome.storage, the service worker console has no document, and picking
+  // the wrong one produces a confusing TypeError mid-draft.
   $('copy-debug').addEventListener('click', () => {
     if (!isExt) return;
-    chrome.storage.local.get(['espnDebugFrames'], (v) => {
-      navigator.clipboard.writeText((v.espnDebugFrames || []).join('\n'));
+    const KEYS = ['espnDraft', 'espnBackfillInfo', 'espnCmdWords',
+                  'espnPickFrames', 'espnDebugFrames'];
+    chrome.storage.local.get(KEYS, (v) => {
+      const frames = v.espnPickFrames || [];
+      const out = {
+        version: (chrome.runtime.getManifest && chrome.runtime.getManifest().version) || null,
+        espnDraft: v.espnDraft || null,
+        espnBackfillInfo: v.espnBackfillInfo || null,
+        espnCmdWords: v.espnCmdWords || null,
+        // Separated out: these answer a mid-draft join, and pick traffic
+        // buries them fast.
+        stateFrames: frames.filter((f) => /^(STATE|INIT)/i.test(f)),
+        pickFrames: frames.slice(-25),
+        debugFrames: (v.espnDebugFrames || []).slice(-25),
+      };
+      navigator.clipboard.writeText(JSON.stringify(out, null, 2));
       $('copy-debug').textContent = 'copied!';
-      setTimeout(() => ($('copy-debug').textContent = 'copy debug frames'), 1500);
+      setTimeout(() => ($('copy-debug').textContent = 'copy diagnostics'), 1500);
     });
   });
   document.querySelectorAll('#tabs button').forEach((b) =>
@@ -161,7 +179,7 @@ async function connectSleeper(draftId) {
   state.platform = 'sleeper';
   state.draftId = draftId;
   state.espn = null;
-  $('copy-debug').hidden = true;
+  $('copy-debug').hidden = !isExt;
   $('status').textContent = 'connecting…';
   try {
     const r = await fetch(`${SLEEPER}/v1/draft/${draftId}`);
