@@ -593,6 +593,11 @@
 
   async function watchEspnPicks() {
     state.format = '1qb_ppr';
+    // Explicit, not defaulted: Sam's ESPN leagues are seasonal, so the
+    // board must price off redraft values (fc_redraft). If an ESPN dynasty
+    // league ever matters, detect it here — the engine itself is mode-blind
+    // and only the board fetch cares.
+    state.mode = 'redraft';
 
     // Read the panel's persisted SF toggle FIRST so the mock fallback below
     // knows whether to shape a superflex lineup. A readable league overrides
