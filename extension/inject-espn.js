@@ -2,44 +2,37 @@
  * Runs in the PAGE (MAIN world) context of ESPN draft rooms, declared as a
  * world:"MAIN" content script so it executes before any page code.
  *
- * ESPN's draft room (league drafts and mocks alike) receives live picks over
- * a WebSocket with an undocumented text protocol. We can't read those frames
- * from a content script, so this shim wraps window.WebSocket and relays every
- * text frame (and anything the page sends) to the content script via
- * window.postMessage. Parsing happens on the extension side.
+ * Wraps window.WebSocket with a Proxy whose construct trap uses
+ * Reflect.construct — this preserves `class X extends WebSocket`,
+ * instanceof, static constants, and prototype identity exactly (a plain
+ * function wrapper breaks subclasses and can blank the whole app). We only
+ * observe INCOMING text frames (picks are broadcast inbound); outgoing
+ * traffic is left completely untouched.
  */
 (function () {
-  if (window.__ffaWsTapInstalled) return;
-  window.__ffaWsTapInstalled = true;
+  try {
+    if (window.__ffaWsTapInstalled) return;
+    window.__ffaWsTapInstalled = true;
 
-  const relay = (direction, url, data) => {
-    try {
-      if (typeof data !== 'string' || data.length > 4000) return;
-      window.postMessage(
-        { source: 'ffa-espn', type: 'ws-frame', direction, url, data },
-        '*'
-      );
-    } catch (_) { /* never break the page */ }
-  };
-
-  const NativeWS = window.WebSocket;
-  function TappedWebSocket(url, protocols) {
-    const ws = protocols !== undefined ? new NativeWS(url, protocols) : new NativeWS(url);
-
-    ws.addEventListener('message', (ev) => relay('in', url, ev.data));
-
-    const nativeSend = ws.send.bind(ws);
-    ws.send = (data) => {
-      relay('out', url, data);
-      return nativeSend(data);
+    const relay = (url, data) => {
+      try {
+        if (typeof data !== 'string' || data.length > 4000) return;
+        window.postMessage(
+          { source: 'ffa-espn', type: 'ws-frame', direction: 'in', url: String(url || ''), data },
+          '*'
+        );
+      } catch (_) { /* never break the page */ }
     };
-    return ws;
-  }
-  TappedWebSocket.prototype = NativeWS.prototype;
-  TappedWebSocket.CONNECTING = NativeWS.CONNECTING;
-  TappedWebSocket.OPEN = NativeWS.OPEN;
-  TappedWebSocket.CLOSING = NativeWS.CLOSING;
-  TappedWebSocket.CLOSED = NativeWS.CLOSED;
 
-  window.WebSocket = TappedWebSocket;
+    const NativeWS = window.WebSocket;
+    window.WebSocket = new Proxy(NativeWS, {
+      construct(target, args, newTarget) {
+        const ws = Reflect.construct(target, args, newTarget);
+        try {
+          ws.addEventListener('message', (ev) => relay(ws.url, ev.data));
+        } catch (_) { /* observation is best-effort */ }
+        return ws;
+      },
+    });
+  } catch (_) { /* if anything goes wrong, leave the page untouched */ }
 })();
