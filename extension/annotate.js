@@ -537,13 +537,16 @@
     // order we have to infer from frames. Fetched once at startup; the live
     // feed takes over from there.
     state.espnBackfill = [];
+    let backfillInfo = { tried: false };
     if (leagueId && leagueId !== '0') {
+      backfillInfo = { tried: true };
       try {
         const j = await xfetch(
           `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${season}/segments/0/leagues/${leagueId}?view=mDraftDetail`,
           true
         );
-        const raw = (j && j.draftDetail && j.draftDetail.picks) || [];
+        const dd = (j && j.draftDetail) || null;
+        const raw = (dd && dd.picks) || [];
         state.espnBackfill = raw
           .map((p) => ({
             espn_id: String(p.playerId),
@@ -554,7 +557,26 @@
           // pre-allocated for the whole draft.
           .filter((p) => p.espn_id && p.espn_id !== '0' && p.pick_no > 0)
           .sort((a, b) => a.pick_no - b.pick_no);
-      } catch (_) { /* mock or unreadable — live feed only */ }
+        // Distinguish the failure modes that look identical from outside:
+        // no draftDetail at all, a draftDetail for a draft that has not
+        // happened (a practice draft reports its parent league's unstarted
+        // draft), and a real response we simply failed to map.
+        backfillInfo = {
+          tried: true,
+          keys: j ? Object.keys(j).slice(0, 12) : null,
+          hasDraftDetail: !!dd,
+          drafted: dd ? dd.drafted : null,
+          inProgress: dd ? dd.inProgress : null,
+          rawPicks: raw.length,
+          usable: state.espnBackfill.length,
+          sample: raw[0] ? Object.keys(raw[0]) : null,
+        };
+      } catch (e) {
+        backfillInfo = { tried: true, error: String(e && e.message || e) };
+      }
+    }
+    if (isExt) {
+      try { chrome.storage.local.set({ espnBackfillInfo: backfillInfo }); } catch (_) {}
     }
 
     // Mock-lobby fallback. Without it the lineup keeps the Sleeper-flavoured
