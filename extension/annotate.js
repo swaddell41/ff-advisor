@@ -127,9 +127,11 @@
       h += `<div style="${gray};margin-bottom:6px">lookahead off — draft slot unknown (ESPN or no draft order)</div>`;
     }
 
-    // Per-position: best now vs likely-there-later vs drop
+    // Per-position: best now vs likely-there-later vs full-run worst case
+    const anyWorst = a.positions.some((r) => r.worst);
     h += '<table style="width:100%;border-collapse:collapse;margin-bottom:6px">' +
-      `<tr style="${gray};text-align:left"><th></th><th>best now</th><th>at your next pick</th><th>vanishes</th></tr>`;
+      `<tr style="${gray};text-align:left"><th></th><th>best now</th><th>at your next pick</th>` +
+      (anyWorst ? '<th>if a run</th>' : '') + '<th>vanishes</th></tr>';
     for (const row of a.positions) {
       if (!row.now) continue;
       const dropTxt = row.drop >= 300
@@ -138,9 +140,15 @@
       const held = !row.eligible
         ? ` <span style="${gray}">(held: can't fill an open slot)</span>`
         : '';
+      const runHot = row.worst && row.nb && (row.nb.value - row.worst.value) >= 400;
       h += `<tr><td><b>${row.pos}</b></td>` +
         `<td>${row.now.name} ${kfmt(row.now.value)}</td>` +
         `<td>${row.nb ? row.nb.name + ' ' + kfmt(row.nb.value) : '<span style="' + gray + '">—</span>'}</td>` +
+        (anyWorst
+          ? `<td>${row.worst
+              ? `<span style="color:${runHot ? '#f87171' : '#8b93a5'}">${row.worst.name} ${kfmt(row.worst.value)}</span>`
+              : `<span style="${gray}">—</span>`}</td>`
+          : '') +
         `<td>${dropTxt}${held}</td></tr>`;
     }
     h += '</table>';
@@ -167,7 +175,12 @@
     if (a.phase === 'filling starters') rules.push('players who can\'t fill an open starting slot are excluded');
     if (a.teFilled) rules.push('TE slot filled — TE2s don\'t qualify for flex (their price is slot scarcity, not points)');
     if (a.usedGatedFallback) rules.push('NO eligible starter-fillers left on the board — showing held players as fallback');
-    if (a.la) rules.push('room model: top values go first; QBs capped at 1/3 of picks in 1QB rooms');
+    if (a.la && a.rosterAware) {
+      rules.push('room model: each team before your next pick takes its best-value NEED ' +
+        '(we track every roster); "if a run" = every team that could start the position takes it');
+    } else if (a.la) {
+      rules.push('room model: top values go first; QBs capped at 1/3 of picks in 1QB rooms (rosters unknown)');
+    }
     if (rules.length) {
       h += `<div style="${gray};margin-top:6px">rules in effect: ${rules.join(' · ')}</div>`;
     }
@@ -251,6 +264,7 @@
     mode: 'redraft',
     mySlot: null,        // my draft slot (1-based) — enables lookahead
     draftType: 'snake',  // 'snake' | 'linear'
+    slotCounts: null,    // draft_slot -> {QB:n,...} EVERY team's roster — enables run modeling
     audit: null,         // last recommend()'s reasoning, for the audit panel
   };
 
@@ -365,6 +379,16 @@
         try {
           const picks = await xfetch(`${SLEEPER}/v1/draft/${m[1]}/picks`);
           state.pickedIds = new Set((picks || []).map((p) => String(p.player_id)));
+          // Every team's roster by draft slot — feeds the run model (which
+          // positions the teams picking before my next turn still need).
+          const slotCounts = {};
+          for (const p of picks || []) {
+            const s = p.draft_slot;
+            if (!s) continue;
+            const pos = (p.metadata && p.metadata.position) || '?';
+            (slotCounts[s] = slotCounts[s] || {})[pos] = (slotCounts[s][pos] || 0) + 1;
+          }
+          state.slotCounts = slotCounts;
           if (state.myUserId) {
             const counts = {};
             for (const p of picks || []) {
@@ -667,10 +691,10 @@
     return null;
   }
 
-  // Best remaining player per position after the room makes `removals`
-  // picks. Opponents modeled as taking our board's top values — except QBs
-  // in 1QB rooms, which real drafters take far slower than value boards
-  // rank them (capped at 1/3 of the run).
+  // FALLBACK room model (used when we don't know opponents' rosters, e.g.
+  // ESPN): the room takes our board's top values — except QBs in 1QB
+  // rooms, which real drafters take far slower than value boards rank
+  // them (capped at 1/3 of the run).
   function expectedNextBest(avail, removals) {
     const qbCap = state.format.startsWith('sf') ? Infinity : Math.ceil(removals / 3);
     const gone = new Set();
@@ -689,6 +713,80 @@
       if (!(p.position in best)) best[p.position] = p;
     }
     return best;
+  }
+
+  // Can a team with roster `c` start another player at `pos`? Same
+  // starters-first rules we apply to ourselves, assumed of opponents.
+  // Once their lineup is full they hunt RB/WR upside.
+  function teamCanStart(c, pos) {
+    const L = state.lineup;
+    const ded = {
+      QB: (L.qb + L.sf) - (c.QB || 0),
+      RB: L.rb - (c.RB || 0),
+      WR: L.wr - (c.WR || 0),
+      TE: L.te - (c.TE || 0),
+    };
+    const flexUsed = Math.max(0, (c.RB || 0) - L.rb) +
+      Math.max(0, (c.WR || 0) - L.wr) + Math.max(0, (c.TE || 0) - L.te);
+    const flexOpen = Math.max(0, L.flex - flexUsed);
+    const anyOpen = flexOpen > 0 || Object.values(ded).some((n) => n > 0);
+    if (!anyOpen) return pos === 'RB' || pos === 'WR';
+    return (ded[pos] || 0) > 0 || (flexOpen > 0 && (pos === 'RB' || pos === 'WR'));
+  }
+
+  // The draft slots (teams) picking between now and my next turn, in order.
+  function interveningSlots(la) {
+    const slots = [];
+    for (let pn = state.currentPick; pn < la.next; pn++) {
+      const s = pickSlot(pn);
+      if (s === state.mySlot) continue; // my own current pick
+      slots.push(s);
+    }
+    return slots;
+  }
+
+  // Roster-aware room simulation: each intervening pick belongs to a real
+  // team whose roster we KNOW. Each takes the best value among positions
+  // they can still start — so runs emerge naturally: six QB-needy teams
+  // means six QBs likely gone, not the flat value-order guess. Returns
+  // expected best-per-position at my next pick, or null without rosters.
+  function simulateRoom(avail, la) {
+    if (!state.slotCounts || !Object.keys(state.slotCounts).length) return null;
+    const sim = {};
+    const counts = (s) => (sim[s] = sim[s] || { ...(state.slotCounts[s] || {}) });
+    const gone = new Set();
+    for (const s of interveningSlots(la)) {
+      const c = counts(s);
+      let take = avail.find((p) => !gone.has(p.player_id) && teamCanStart(c, p.position));
+      if (!take) take = avail.find((p) => !gone.has(p.player_id));
+      if (!take) break;
+      gone.add(take.player_id);
+      c[take.position] = (c[take.position] || 0) + 1;
+    }
+    const best = {};
+    for (const p of avail) {
+      if (gone.has(p.player_id)) continue;
+      if (!(p.position in best)) best[p.position] = p;
+    }
+    return best;
+  }
+
+  // Worst case per position: assume EVERY intervening team that could
+  // start that position takes it — the full run. A bound, not a forecast;
+  // shown in the audit and behind the strip's run warning.
+  function worstCaseAtNext(avail, la) {
+    if (!state.slotCounts || !Object.keys(state.slotCounts).length) return null;
+    const slots = interveningSlots(la);
+    const res = {};
+    for (const pos of ['QB', 'RB', 'WR', 'TE']) {
+      let n = 0;
+      for (const s of slots) {
+        if (teamCanStart(state.slotCounts[s] || {}, pos)) n += 1;
+      }
+      const grp = avail.filter((p) => p.position === pos);
+      res[pos] = grp.length ? grp[Math.min(n, grp.length - 1)] : null;
+    }
+    return res;
   }
 
   // Global recommendation: scored over the ENTIRE board (not just rows the
@@ -759,7 +857,19 @@
     // (WR19→WR26) can't.
     const avail = state.allPlayers.filter((p) => !state.pickedIds.has(String(p.player_id)));
     const la = nextMyPickInfo();
-    const nextBest = la ? expectedNextBest(avail, la.removals) : {};
+    let nextBest = {};
+    let worstBest = null;
+    let rosterAware = false;
+    if (la) {
+      const sim = simulateRoom(avail, la);
+      if (sim) {
+        nextBest = sim;
+        worstBest = worstCaseAtNext(avail, la);
+        rosterAware = true;
+      } else {
+        nextBest = expectedNextBest(avail, la.removals);
+      }
+    }
     const dropOf = (p) => {
       if (!la) return 0;
       const nb = nextBest[p.position];
@@ -818,13 +928,16 @@
       flexOpen,
       repl: state.repl ? { ...state.repl } : null,
       teFilled: !!teFilled,
+      rosterAware,
       positions: ['RB', 'WR', 'TE', 'QB'].map((pos) => {
         const now = avail.find((p) => p.position === pos) || null;
         const nb = (la && nextBest[pos]) || null;
+        const wc = (worstBest && worstBest[pos]) || null;
         return {
           pos,
           now,
           nb,
+          worst: wc,
           drop: now && nb ? Math.max(0, now.value - nb.value) : 0,
           eligible: benchPhase || !C ? true : canStart(pos),
         };
@@ -872,8 +985,25 @@
       const dropNote = topDrop >= 300
         ? `<span style="color:#f97316"> −${(topDrop / 1000).toFixed(1)}k if you wait</span>`
         : '';
+      // Run-risk warning: a position I still need but am NOT taking now,
+      // where the full-run worst case sits far below the expected outcome.
+      let runWarn = '';
+      if (worstBest && !benchPhase) {
+        let worstPos = null;
+        let gap = 0;
+        for (const pos of ['QB', 'RB', 'WR', 'TE']) {
+          if (pos === top[0].p.position || !canStart(pos)) continue;
+          const e = nextBest[pos];
+          const w = worstBest[pos];
+          if (e && w && e.value - w.value > gap) { gap = e.value - w.value; worstPos = pos; }
+        }
+        if (worstPos && gap >= 400) {
+          runWarn = ` · <span style="color:#f87171">⚠ ${worstPos} run risk: could fall to ` +
+            `${worstBest[worstPos].name} ${kfmt(worstBest[worstPos].value)}</span>`;
+        }
+      }
       reco.innerHTML =
-        '<span style="color:#facc15">★ PICK: ' + fmt(top[0]) + '</span>' + dropNote +
+        '<span style="color:#facc15">★ PICK: ' + fmt(top[0]) + '</span>' + dropNote + runWarn +
         (top[1] ? '<span style="color:#8b93a5"> · then ' + top.slice(1).map(fmt).join(' · ') + '</span>' : '') +
         roster +
         ' · <span id="ffa-why" style="color:#7dd3fc;text-decoration:underline;cursor:pointer">why?</span>';
