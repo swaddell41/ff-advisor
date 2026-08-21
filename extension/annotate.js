@@ -135,15 +135,24 @@
   css.textContent = `
     .ffa-badge {
       display: inline-block;
-      margin-left: 5px;
-      padding: 0 4px;
+      margin-left: 4px;
+      padding: 0 3px;
       border-radius: 4px;
-      font: 700 10px/1.5 Menlo, monospace;
+      font: 700 9px/1.5 Menlo, monospace;
       background: rgba(15, 17, 21, 0.85);
       color: #7dd3fc;
       border: 1px solid rgba(125, 211, 252, 0.35);
       vertical-align: middle;
       white-space: nowrap;
+    }
+    .ffa-badge.ffa-overlay {
+      position: absolute;
+      right: 2px;
+      top: 50%;
+      transform: translateY(-50%);
+      margin-left: 0;
+      background: rgba(15, 17, 21, 0.95);
+      z-index: 5;
     }
     .ffa-badge.ffa-steal { color: #4ade80; border-color: rgba(74, 222, 128, 0.45); }
     .ffa-badge.ffa-t1 { color: #facc15; border-color: rgba(250, 204, 21, 0.45); }
@@ -165,6 +174,8 @@
     el.classList.toggle('ffa-t1', p.tier === 1 && !(state.currentPick > 1 && delta >= 6));
   }
 
+  const processed = new WeakSet();
+
   function annotateAfter(textNode, p) {
     const b = document.createElement('span');
     b.className = 'ffa-badge';
@@ -174,7 +185,24 @@
       (p.market_value ? ` · market ${p.market_value}` : '') +
       (p.injury_status ? ` · ${p.injury_status}` : '');
     updateBadge(b);
-    textNode.parentNode.insertBefore(b, textNode.nextSibling);
+    const parent = textNode.parentNode;
+    parent.insertBefore(b, textNode.nextSibling);
+
+    // If an ellipsizing ancestor is (now) truncating, take the badge out of
+    // the text flow: overlay it at that ancestor's right edge instead, so
+    // the site's name text renders at full length.
+    let anc = textNode.parentElement;
+    for (let i = 0; i < 3 && anc; i += 1, anc = anc.parentElement) {
+      const cs = getComputedStyle(anc);
+      const clips = cs.textOverflow === 'ellipsis' || cs.overflow === 'hidden' || cs.overflowX === 'hidden';
+      if (clips && anc.scrollWidth > anc.clientWidth + 1) {
+        b.classList.add('ffa-overlay');
+        if (getComputedStyle(anc).position === 'static') anc.style.position = 'relative';
+        anc.appendChild(b);
+        break;
+      }
+    }
+
     if (!state.badges.has(p.player_id)) state.badges.set(p.player_id, new Set());
     state.badges.get(p.player_id).add(b);
   }
@@ -205,9 +233,8 @@
       n += 1;
       const matches = state.byName.get(norm(t.nodeValue.trim()));
       if (!matches || matches.length !== 1) continue; // ambiguous names skipped
-      // Already badged right after this text node?
-      const next = t.nextSibling;
-      if (next && next.nodeType === 1 && next.classList && next.classList.contains('ffa-badge')) continue;
+      if (processed.has(t)) continue;
+      processed.add(t);
       annotateAfter(t, matches[0]);
     }
     setPill(`${state.byName.size} players on board · ${state.badges.size} matched on page` +
