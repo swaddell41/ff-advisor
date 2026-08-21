@@ -30,13 +30,13 @@
   // All network goes through the background worker when running as an
   // extension — page CSP (Sleeper/ESPN restrict connect-src) blocks direct
   // content-script fetches.
-  function xfetch(url) {
+  function xfetch(url, creds) {
     if (!isExt || !chrome.runtime || !chrome.runtime.sendMessage || TEST) {
-      return fetch(url).then((r) => r.json());
+      return fetch(url, creds ? { credentials: 'include' } : undefined).then((r) => r.json());
     }
     return new Promise((resolve, reject) => {
       try {
-        chrome.runtime.sendMessage({ type: 'ffa-fetch', url }, (resp) => {
+        chrome.runtime.sendMessage({ type: 'ffa-fetch', url, creds: !!creds }, (resp) => {
           if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
           if (!resp || !resp.ok) return reject(new Error((resp && resp.error) || 'fetch failed'));
           resolve(resp.json);
@@ -427,47 +427,77 @@
   async function watchEspnPicks() {
     state.format = '1qb_ppr';
 
+    // Read the panel's persisted SF toggle FIRST so the mock fallback below
+    // knows whether to shape a superflex lineup. A readable league overrides
+    // it straight after — real settings beat a manual switch.
+    if (isExt) {
+      try {
+        await new Promise((res) => chrome.storage.local.get(['espnSF'], (v) => {
+          if (v.espnSF) state.format = 'sf_ppr';
+          res();
+        }));
+      } catch (_) { /* orphaned after extension reload */ }
+    }
+
     // Superflex detection for real ESPN leagues: their lineup settings are
-    // readable in-session (the page's own API, cookies included). Slot 7 is
-    // OP (QB-eligible superflex); QB slot count > 1 also means 2QB.
-    const leagueId = new URLSearchParams(location.search).get('leagueId');
+    // readable in-session. Slot 7 is OP (QB-eligible superflex); QB slot
+    // count > 1 also means 2QB.
+    const qs = new URLSearchParams(location.search);
+    const leagueId = qs.get('leagueId');
+    // Prefer the URL's seasonId over the calendar year — an offseason draft
+    // runs for NEXT season, and asking for the wrong year returns nothing.
+    const season = qs.get('seasonId') || String(new Date().getFullYear());
+    let leagueOk = false;
     if (leagueId && leagueId !== '0') {
       try {
-        const year = new Date().getFullYear();
-        const r = await fetch(
-          `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${year}/segments/0/leagues/${leagueId}?view=mSettings`,
-          { credentials: 'include' }
+        // Via the background proxy (page CSP blocks content-script fetches),
+        // with creds so private leagues answer instead of 401ing.
+        const j = await xfetch(
+          `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${season}/segments/0/leagues/${leagueId}?view=mSettings`,
+          true
         );
-        if (r.ok) {
-          const j = await r.json();
-          const slots = (j.settings && j.settings.rosterSettings && j.settings.rosterSettings.lineupSlotCounts) || {};
-          if ((slots['7'] || 0) > 0 || (slots['0'] || 0) > 1) state.format = 'sf_ppr';
+        const slots = (j && j.settings && j.settings.rosterSettings
+          && j.settings.rosterSettings.lineupSlotCounts) || null;
+        if (slots) {
+          const n = (id) => slots[id] || 0;
+          if (n('7') > 0 || n('0') > 1) state.format = 'sf_ppr';
           state.lineup = {
             teams: (j.settings && j.settings.size) || 10,
-            qb: slots['0'] || 1,
-            rb: slots['2'] || 2,
-            wr: slots['4'] || 2,
-            te: slots['6'] || 1,
-            flex: slots['23'] || 1,
-            sf: slots['7'] || 0,
-            k: slots['17'] || 0,
-            dst: slots['16'] || 0,
-            rounds: 16,
+            qb: n('0') || 1,
+            rb: n('2'),
+            wr: n('4'),
+            te: n('6'),
+            // 23 = FLEX (RB/WR/TE), 3 = RB/WR, 5 = WR/TE. All three behave
+            // as flex for replacement-level purposes.
+            flex: n('23') + n('3') + n('5'),
+            sf: n('7'),
+            k: n('17'),
+            dst: n('16'),
+            // Rounds = every roster spot the draft actually fills: all
+            // lineup slots INCLUDING bench (20), excluding IR (21) since
+            // that is never drafted into. This was hardcoded to 16, which
+            // silently mis-sized snake math, replacement baselines and the
+            // "picks left" counter in any league that wasn't 16 rounds.
+            rounds: Object.keys(slots).reduce((t, id) => (id === '21' ? t : t + n(id)), 0) || 16,
           };
+          leagueOk = true;
           computeReplacement();
         }
-      } catch (_) { /* mocks / blocked — fall through */ }
+      } catch (_) { /* mock lobby, logged out, or blocked — fallback below */ }
+    }
+
+    // Mock-lobby fallback. Without it the lineup keeps the Sleeper-flavoured
+    // defaults (15 rounds, no K/DST), so replacement levels and every snake
+    // calculation are wrong for the whole draft.
+    if (!leagueOk) {
+      state.lineup = {
+        teams: 10, qb: 1, rb: 2, wr: 2, te: 1, flex: 1,
+        sf: state.format === 'sf_ppr' ? 1 : 0, k: 1, dst: 1, rounds: 16,
+      };
+      computeReplacement();
     }
 
     if (!isExt) return;
-    // Panel's SF toggle (persisted) overrides when league detection had
-    // nothing to say (e.g. mock lobby drafts).
-    try {
-      await new Promise((res) => chrome.storage.local.get(['espnSF'], (v) => {
-        if (state.format === '1qb_ppr' && v.espnSF) state.format = 'sf_ppr';
-        res();
-      }));
-    } catch (_) {}
     try {
     const applyEspn = (d) => {
       state.pickedIds = new Set(

@@ -18,6 +18,9 @@ chrome.action.onClicked.addListener((tab) => {
 const ALLOWED = [
   'https://api.sleeper.app/',
   'https://ff-advisor-sam-waddells-projects.vercel.app/',
+  // League settings (lineup slots, size). Needs the user's ESPN cookies to
+  // see a private league, so callers pass creds:true — see below.
+  'https://lm-api-reads.fantasy.espn.com/',
 ];
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -27,7 +30,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: false, error: 'url not allowed' });
     return false;
   }
-  fetch(url)
+  // credentials:'include' is opt-in per call: the ESPN league API only
+  // answers for leagues the logged-in browser can see. The service worker
+  // sends cookies for any host in host_permissions.
+  fetch(url, msg.creds ? { credentials: 'include' } : undefined)
     .then(async (r) => sendResponse({ ok: r.ok, status: r.status, json: await r.json() }))
     .catch((e) => sendResponse({ ok: false, error: String(e) }));
   return true; // async response

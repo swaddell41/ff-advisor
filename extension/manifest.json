@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Dynasty Advisor \u2014 Draft Assistant",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Live draft board for Sleeper and ESPN drafts: multi-source values, tier breaks, roster needs, and falling-value alerts.",
   "permissions": [
     "sidePanel",
@@ -9,7 +9,8 @@
   ],
   "host_permissions": [
     "https://api.sleeper.app/*",
-    "https://ff-advisor-sam-waddells-projects.vercel.app/*"
+    "https://ff-advisor-sam-waddells-projects.vercel.app/*",
+    "https://lm-api-reads.fantasy.espn.com/*"
   ],
   "side_panel": {
     "default_path": "panel.html"
