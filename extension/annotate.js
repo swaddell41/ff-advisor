@@ -105,7 +105,8 @@
         '<b style="color:#e6e8ee">↑11</b> — falling value: ranked 11 picks earlier than where the draft is now.' +
       '</div>' +
       '<div style="margin-bottom:6px"><span class="ffa-badge ffa-best">★ 5.2k T1</span> ' +
-        '<span style="color:#8b93a5">best available right now — our top pick</span></div>' +
+        '<span style="color:#8b93a5">our top pick for YOUR roster — until your lineup is full, ' +
+        'only players who can fill an open starting slot are recommended</span></div>' +
       '<div style="margin-bottom:6px"><span class="ffa-badge ffa-good">3.1k T2</span> ' +
         '<span style="color:#8b93a5">next-best two options</span></div>' +
       '<div style="margin-bottom:8px"><span class="ffa-badge ffa-steal">2.0k T3 ↑9</span> ' +
@@ -551,8 +552,12 @@
 
     // Starters-first gate: while ANY starting slot (dedicated or flex) is
     // open, players who cannot fill one — e.g. a backup QB in a 1QB league —
-    // are hard-deprioritized. Once your lineup is full, the gate lifts and
-    // bench value (QB insurance, RB depth) competes on normal VORP terms.
+    // are EXCLUDED from the recommendation, not just penalized. A soft
+    // penalty leaks in the endgame: when every remaining flex-eligible
+    // player sits below the replacement line (VORP 0, score = 3% value
+    // noise), a gated QB's residual VORP survives even a 0.15 multiplier
+    // and tops the strip. Once your lineup is full, the gate lifts and
+    // bench value (QB insurance, RB depth) competes on normal terms.
     const L = state.lineup;
     const C = state.myCounts;
     let startersOpen = false;
@@ -588,6 +593,7 @@
     //     final rounds next to K/DST — where best practice puts them.
     const benchPhase = C && L && !startersOpen;
     const cands = [];
+    const gated = []; // can't fill an open starting slot; only shown if nobody can
     for (const p of state.allPlayers) {
       if (state.pickedIds.has(String(p.player_id))) continue;
       let score;
@@ -604,12 +610,19 @@
         }
         const vorp = Math.max(0, p.value - repl);
         score = (vorp + p.value * 0.03) * needMult(p.position);
-        if (startersOpen && !canStart(p.position)) score *= 0.15;
+        if (startersOpen && !canStart(p.position)) {
+          gated.push({ p, score: score * 0.15 });
+          continue;
+        }
       }
       cands.push({ p, score });
     }
-    cands.sort((a, b) => b.score - a.score);
-    const top = cands.slice(0, 3);
+    // Fallback: if no eligible starter-fillers remain on the board (e.g. an
+    // open TE slot with every ranked TE drafted), show the gated pool
+    // rather than a blank strip.
+    const pool = cands.length ? cands : gated;
+    pool.sort((a, b) => b.score - a.score);
+    const top = pool.slice(0, 3);
 
     top.forEach((c, i) => {
       const els = state.badges.get(c.p.player_id);
