@@ -366,6 +366,50 @@
     } catch (_) { return null; }
   }
 
+  // ── DOM sampling (diagnostics) ────────────────────────────────────────
+  // Capture a small structural sample of the draft room so its markup can
+  // be analysed offline. Stored rather than logged, so it exports from the
+  // side panel's "copy diagnostics" button with no console involved.
+  //
+  // Two things need this: ESPN's Pick History tab, which is the page's own
+  // complete record of who has been drafted (and therefore the only
+  // recoverable source for picks missed during an outage in a mock), and
+  // the player-row markup for badge placement.
+  //
+  // Read-only, truncated, and throttled — it must never cost anything on
+  // a page we do not own.
+  let lastDomSample = 0;
+  function captureDomSample() {
+    if (!isExt) return;
+    const now = Date.now();
+    if (now - lastDomSample < 10000) return;
+    lastDomSample = now;
+    try {
+      const clip = (el, n) => (el && el.outerHTML ? el.outerHTML.slice(0, n) : null);
+      // Which tab is showing tells me whether the rows below are the
+      // player list or the pick history.
+      const tabs = [...document.querySelectorAll('[role="tab"], nav a, nav button')]
+        .map((t) => (t.textContent || '').trim())
+        .filter((t) => t && t.length < 30)
+        .slice(0, 10);
+      const rows = [...document.querySelectorAll('tr')];
+      const sample = {
+        at: now,
+        tabs,
+        rowCount: rows.length,
+        rows: rows.slice(0, 3).map((r) => clip(r, 1400)),
+        // Anything that looks like a pick-history line: a round.pick label
+        // such as "1.04" or "R1 P4" is the giveaway.
+        historyish: [...document.querySelectorAll('li, tr, div')]
+          .filter((el) => el.children.length && el.children.length < 12
+            && /\b\d{1,2}\s*[.\-]\s*\d{1,2}\b|\bR\d{1,2}\b/.test((el.textContent || '').slice(0, 60)))
+          .slice(0, 3)
+          .map((el) => clip(el, 900)),
+      };
+      try { chrome.storage.local.set({ espnDomSample: sample }); } catch (_) {}
+    } catch (_) { /* diagnostics must never break the page */ }
+  }
+
   // ── League size, observed ─────────────────────────────────────────────
   // The draft that is actually running is the authority on how many teams
   // are in it — not a settings field, which can be stale, absent (ESPN
@@ -982,6 +1026,7 @@
       annotateAfter(t, p);
     }
     pruneBadges();
+    captureDomSample();
     setPill(`${state.byName.size} players on board · ${state.badges.size} matched on page` +
       (state.badges.size === 0 ? ' — no names matched yet (scrolling the player list helps)' : '') +
       (state.espnGap
