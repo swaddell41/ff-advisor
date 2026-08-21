@@ -165,7 +165,7 @@
     el.classList.toggle('ffa-t1', p.tier === 1 && !(state.currentPick > 1 && delta >= 6));
   }
 
-  function annotate(el, p) {
+  function annotateAfter(textNode, p) {
     const b = document.createElement('span');
     b.className = 'ffa-badge';
     b.__ffaPlayer = p;
@@ -174,8 +174,7 @@
       (p.market_value ? ` · market ${p.market_value}` : '') +
       (p.injury_status ? ` · ${p.injury_status}` : '');
     updateBadge(b);
-    el.appendChild(b);
-    el.dataset.ffaTagged = '1';
+    textNode.parentNode.insertBefore(b, textNode.nextSibling);
     if (!state.badges.has(p.player_id)) state.badges.set(p.player_id, new Set());
     state.badges.get(p.player_id).add(b);
   }
@@ -183,24 +182,33 @@
   // ── Scanning ──────────────────────────────────────────────────────────
   function scan() {
     if (!state.byName.size) return;
-    const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT, {
-      acceptNode(node) {
-        if (node.dataset && node.dataset.ffaTagged) return NodeFilter.FILTER_REJECT;
-        if (node.classList && node.classList.contains('ffa-badge')) return NodeFilter.FILTER_REJECT;
-        if (node.childElementCount > 0) return NodeFilter.FILTER_SKIP;
-        const t = node.textContent;
-        if (!t || t.length < 4 || t.length > 32) return NodeFilter.FILTER_SKIP;
+    // Walk TEXT nodes, not leaf elements: draft sites render the player
+    // name as a bare text node next to sibling elements (metadata, icons),
+    // so no single element's full text equals the name.
+    const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT, {
+      acceptNode(t) {
+        const s = t.nodeValue;
+        if (!s) return NodeFilter.FILTER_SKIP;
+        const len = s.trim().length;
+        if (len < 4 || len > 32) return NodeFilter.FILTER_SKIP;
+        const p = t.parentElement;
+        if (!p) return NodeFilter.FILTER_SKIP;
+        const tag = p.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEXTAREA') return NodeFilter.FILTER_REJECT;
+        if (p.classList && p.classList.contains('ffa-badge')) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       },
     });
-    let node;
+    let t;
     let n = 0;
-    while ((node = walker.nextNode()) && n < 20000) {
+    while ((t = walker.nextNode()) && n < 30000) {
       n += 1;
-      const matches = state.byName.get(norm(node.textContent.trim()));
-      if (!matches) continue;
-      // Ambiguous names: skip unless exactly one candidate (safe default).
-      if (matches.length === 1) annotate(node, matches[0]);
+      const matches = state.byName.get(norm(t.nodeValue.trim()));
+      if (!matches || matches.length !== 1) continue; // ambiguous names skipped
+      // Already badged right after this text node?
+      const next = t.nextSibling;
+      if (next && next.nodeType === 1 && next.classList && next.classList.contains('ffa-badge')) continue;
+      annotateAfter(t, matches[0]);
     }
     setPill(`${state.byName.size} players on board · ${state.badges.size} matched on page` +
       (state.badges.size === 0 ? ' — no names matched yet (scrolling the player list helps)' : ''));
