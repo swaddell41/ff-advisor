@@ -525,6 +525,38 @@
       } catch (_) { /* mock lobby, logged out, or blocked — fallback below */ }
     }
 
+    // Backfill for a mid-draft join. Our WebSocket tap only sees picks made
+    // AFTER it connects: everything earlier arrives in ESPN's STATE frame,
+    // which we do not parse. So reloading the extension or refreshing the
+    // tab mid-draft would silently drop all pick history — the board would
+    // show drafted players as available for the rest of the draft.
+    //
+    // ESPN's own draft-detail view is the fix, and a better one than
+    // parsing STATE: it is format-independent, survives any protocol
+    // change, and carries REAL overall pick numbers rather than the arrival
+    // order we have to infer from frames. Fetched once at startup; the live
+    // feed takes over from there.
+    state.espnBackfill = [];
+    if (leagueId && leagueId !== '0') {
+      try {
+        const j = await xfetch(
+          `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${season}/segments/0/leagues/${leagueId}?view=mDraftDetail`,
+          true
+        );
+        const raw = (j && j.draftDetail && j.draftDetail.picks) || [];
+        state.espnBackfill = raw
+          .map((p) => ({
+            espn_id: String(p.playerId),
+            team_id: p.teamId != null ? String(p.teamId) : null,
+            pick_no: Number(p.overallPickNumber) || 0,
+          }))
+          // playerId 0/absent marks an unmade pick — the array is often
+          // pre-allocated for the whole draft.
+          .filter((p) => p.espn_id && p.espn_id !== '0' && p.pick_no > 0)
+          .sort((a, b) => a.pick_no - b.pick_no);
+      } catch (_) { /* mock or unreadable — live feed only */ }
+    }
+
     // Mock-lobby fallback. Without it the lineup keeps the Sleeper-flavoured
     // defaults (15 rounds, no K/DST), so replacement levels and every snake
     // calculation are wrong for the whole draft.
@@ -541,11 +573,31 @@
     state.draftType = 'snake';   // ESPN mocks and redraft leagues are snake
 
     const applyEspn = (d) => {
+      // Merge the backfill under the live feed. Backfilled picks carry real
+      // overall numbers from ESPN; live picks continue from the highest of
+      // them, since content-espn.js can only number by arrival order and
+      // restarts at 1 on every reconnect.
+      const merged = [];
+      const have = new Set();
+      for (const b of state.espnBackfill || []) {
+        if (have.has(b.espn_id)) continue;
+        have.add(b.espn_id);
+        merged.push(b);
+      }
+      let next = merged.reduce((m, b) => Math.max(m, b.pick_no), 0);
+      for (const p of d.picks) {
+        const id = String(p.espn_id);
+        if (have.has(id)) continue;   // already known from the backfill
+        have.add(id);
+        merged.push({ espn_id: id, team_id: p.team_id, pick_no: ++next });
+      }
+      merged.sort((a, b) => a.pick_no - b.pick_no);
+
       // The running draft outranks settings.size, and is the ONLY source in
       // a mock, where the league API exposes nothing. A live capture was an
       // 8-team draft against our 10-team default — which alone would have
       // kept the seating guard below from ever engaging.
-      applyTeamCount(observedTeamCount(d.picks.map((p) => p.team_id)));
+      applyTeamCount(observedTeamCount(merged.map((p) => p.team_id)));
 
       const teams = state.lineup.teams || 10;
 
@@ -560,7 +612,7 @@
       // first, and naive first-wins dedupe would drop the real pick.
       const bySlot = new Map();
       const order = [];
-      for (const p of d.picks) {
+      for (const p of merged) {
         const bp = state.byEspn.get(String(p.espn_id)) || null;
         if (p.team_id == null || p.pick_no == null) { order.push({ p, bp }); continue; }
         const key = `${p.team_id}|${Math.ceil(Number(p.pick_no) / teams)}`;
