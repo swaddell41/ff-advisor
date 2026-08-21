@@ -67,6 +67,14 @@
   reco.title = 'Best picks for your roster right now (click to jump to the top player if visible)';
   document.documentElement.appendChild(reco);
   reco.addEventListener('click', () => {
+    if (!state.myCounts && !state.myUserId) {
+      const u = window.prompt('Your Sleeper username (for roster-aware recommendations):');
+      if (u && u.trim()) {
+        try { chrome.storage.local.set({ username: u.trim() }); } catch (_) {}
+        resolveMyUserId();
+      }
+      return;
+    }
     const els = reco.__topPid && state.badges.get(reco.__topPid);
     const live = els && [...els].find((e) => e.isConnected);
     if (live) live.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -189,6 +197,22 @@
       repl[pos] = idx >= 0 ? group[idx].value : 0;
     }
     state.repl = repl;
+  }
+
+  function detectMyIdentity() {
+    // Sleeper's web app stores the logged-in user's id in plain
+    // localStorage — same origin as this content script, so identity is
+    // zero-setup. (No tokens read; just the public user id.)
+    if (isSleeper) {
+      try {
+        const raw = localStorage.getItem('user_id');
+        if (raw) {
+          const id = JSON.parse(raw);
+          if (id) { state.myUserId = String(id); return; }
+        }
+      } catch (_) {}
+    }
+    resolveMyUserId();
   }
 
   async function resolveMyUserId() {
@@ -533,9 +557,14 @@
 
     if (top.length && state.currentPick > 1) {
       const fmt = (c) => `${c.p.name} ${(c.p.value / 1000).toFixed(1)}k ${c.p.position}`;
+      const roster = state.myCounts
+        ? ' · <span style="color:#8b93a5">roster ' +
+          ['QB', 'RB', 'WR', 'TE'].map((x) => (state.myCounts[x] || 0) + x).join(' ') + '</span>'
+        : ' · <span style="color:#f87171">roster unknown — click to set username</span>';
       reco.innerHTML =
         '<span style="color:#facc15">★ PICK: ' + fmt(top[0]) + '</span>' +
-        (top[1] ? '<span style="color:#8b93a5"> · then ' + top.slice(1).map(fmt).join(' · ') + '</span>' : '');
+        (top[1] ? '<span style="color:#8b93a5"> · then ' + top.slice(1).map(fmt).join(' · ') + '</span>' : '') +
+        roster;
       reco.__topPid = top[0].p.player_id;
       reco.style.display = 'block';
     } else {
@@ -559,7 +588,7 @@
 
   // ── Boot ──────────────────────────────────────────────────────────────
   (async function boot() {
-    resolveMyUserId();
+    detectMyIdentity();
     try {
       if (isSleeper) await detectSleeperDraft();
       else await watchEspnPicks();
