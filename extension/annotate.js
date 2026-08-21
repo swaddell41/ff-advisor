@@ -135,6 +135,8 @@
     badges: new Map(),   // player_id -> Set<badge el>
     pickedIds: new Set(),// sleeper ids already drafted
     allPlayers: [],      // full board, for global recommendations
+    lineup: { teams: 10, qb: 1, rb: 2, wr: 2, te: 1, flex: 1, sf: 0 },
+    repl: null,          // replacement-level value per position (VORP baseline)
     myCounts: null,      // {QB: n, RB: n, ...} — my roster so far (null = unknown)
     myUserId: null,      // sleeper user id (from stored username)
     currentPick: 1,
@@ -165,6 +167,28 @@
       state.byName.get(k).push(p);
       if (p.espn_id) state.byEspn.set(String(p.espn_id), p);
     }
+    computeReplacement();
+  }
+
+  // VORP baselines: the value of the player at "replacement level" for each
+  // position — the best guy that's effectively free given how many starters
+  // the league consumes. Draft worth = value ABOVE that line, which is why a
+  // backup QB (QB13 is free) must lose to a weekly-starting RB.
+  function computeReplacement() {
+    const L = state.lineup;
+    const baselineRank = {
+      QB: Math.round(L.teams * (L.qb + L.sf)) + 2,
+      RB: Math.round(L.teams * (L.rb + L.flex * 0.45)) + 2,
+      WR: Math.round(L.teams * (L.wr + L.flex * 0.45)) + 2,
+      TE: Math.round(L.teams * L.te) + 2,
+    };
+    const repl = {};
+    for (const pos of Object.keys(baselineRank)) {
+      const group = state.allPlayers.filter((p) => p.position === pos);
+      const idx = Math.min(baselineRank[pos] - 1, group.length - 1);
+      repl[pos] = idx >= 0 ? group[idx].value : 0;
+    }
+    state.repl = repl;
   }
 
   async function resolveMyUserId() {
@@ -190,6 +214,16 @@
       const scoring = (d.metadata && d.metadata.scoring_type) || '';
       state.format = (s.slots_super_flex || 0) > 0 || scoring.includes('2qb') ? 'sf_ppr' : '1qb_ppr';
       state.mode = scoring.includes('dynasty') ? 'dynasty' : 'redraft';
+      state.lineup = {
+        teams: s.teams || 10,
+        qb: s.slots_qb ?? 1,
+        rb: s.slots_rb ?? 2,
+        wr: s.slots_wr ?? 2,
+        te: s.slots_te ?? 1,
+        flex: (s.slots_flex ?? 1) + (s.slots_wr_rb ?? 0) + (s.slots_wr_rb_te ?? 0),
+        sf: s.slots_super_flex ?? 0,
+      };
+      computeReplacement();
       // poll pick count for steal deltas
       setInterval(async () => {
         try {
@@ -229,6 +263,16 @@
           const j = await r.json();
           const slots = (j.settings && j.settings.rosterSettings && j.settings.rosterSettings.lineupSlotCounts) || {};
           if ((slots['7'] || 0) > 0 || (slots['0'] || 0) > 1) state.format = 'sf_ppr';
+          state.lineup = {
+            teams: (j.settings && j.settings.size) || 10,
+            qb: slots['0'] || 1,
+            rb: slots['2'] || 2,
+            wr: slots['4'] || 2,
+            te: slots['6'] || 1,
+            flex: slots['23'] || 1,
+            sf: slots['7'] || 0,
+          };
+          computeReplacement();
         }
       } catch (_) { /* mocks / blocked — fall through */ }
     }
@@ -464,7 +508,10 @@
     const cands = [];
     for (const p of state.allPlayers) {
       if (state.pickedIds.has(String(p.player_id))) continue;
-      cands.push({ p, score: p.value * needMult(p.position) });
+      const repl = (state.repl && state.repl[p.position]) || 0;
+      // VORP core + a whisper of raw value as tiebreak, need-weighted.
+      const vorp = Math.max(0, p.value - repl);
+      cands.push({ p, score: (vorp + p.value * 0.03) * needMult(p.position) });
     }
     cands.sort((a, b) => b.score - a.score);
     const top = cands.slice(0, 3);
