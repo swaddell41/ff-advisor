@@ -547,20 +547,28 @@
         );
         const dd = (j && j.draftDetail) || null;
         const raw = (dd && dd.picks) || [];
-        state.espnBackfill = raw
-          .map((p) => ({
-            espn_id: String(p.playerId),
-            team_id: p.teamId != null ? String(p.teamId) : null,
-            pick_no: Number(p.overallPickNumber) || 0,
+        // draftDetail is PRE-ALLOCATED for the entire draft: an 8-team,
+        // 17-round league returns all 136 entries from the moment it is
+        // created, with unmade picks carrying a sentinel playerId.
+        //
+        // The previous filter tested the STRINGIFIED id against '0', which
+        // lets a negative sentinel like "-1" straight through — so every
+        // unmade pick was treated as real, injecting 136 phantoms. They
+        // matched nothing on the board, pickedIds stayed empty, and a
+        // mid-draft refresh still cleared the pool. Test the NUMERIC value.
+        const made = raw.filter(
+          (q) => Number(q.playerId) > 0 && Number(q.overallPickNumber) > 0
+        );
+        state.espnBackfill = made
+          .map((q) => ({
+            espn_id: String(q.playerId),
+            team_id: q.teamId != null ? String(q.teamId) : null,
+            pick_no: Number(q.overallPickNumber),
           }))
-          // playerId 0/absent marks an unmade pick — the array is often
-          // pre-allocated for the whole draft.
-          .filter((p) => p.espn_id && p.espn_id !== '0' && p.pick_no > 0)
           .sort((a, b) => a.pick_no - b.pick_no);
         // Distinguish the failure modes that look identical from outside:
-        // no draftDetail at all, a draftDetail for a draft that has not
-        // happened (a practice draft reports its parent league's unstarted
-        // draft), and a real response we simply failed to map.
+        // no draftDetail at all, a draft that has not started, and a real
+        // response we failed to map.
         backfillInfo = {
           tried: true,
           keys: j ? Object.keys(j).slice(0, 12) : null,
@@ -569,6 +577,10 @@
           inProgress: dd ? dd.inProgress : null,
           rawPicks: raw.length,
           usable: state.espnBackfill.length,
+          // The sentinel itself, so it is confirmed rather than assumed.
+          unmadeIds: [...new Set(
+            raw.filter((q) => !(Number(q.playerId) > 0)).map((q) => q.playerId)
+          )].slice(0, 5),
           sample: raw[0] ? Object.keys(raw[0]) : null,
         };
       } catch (e) {
