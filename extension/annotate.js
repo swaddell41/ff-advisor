@@ -485,6 +485,9 @@
         }
       } catch (_) { /* mock lobby, logged out, or blocked — fallback below */ }
     }
+    // Remember whether the lineup is authoritative: if it is not, team
+    // count gets derived from the picks themselves (see applyEspn).
+    state.lineupFromApi = leagueOk;
 
     // Mock-lobby fallback. Without it the lineup keeps the Sleeper-flavoured
     // defaults (15 rounds, no K/DST), so replacement levels and every snake
@@ -502,6 +505,30 @@
     state.draftType = 'snake';   // ESPN mocks and redraft leagues are snake
 
     const applyEspn = (d) => {
+      // League size from the draft itself when settings were unreadable.
+      // Every team picks exactly once per round, so the number of distinct
+      // teams IS the league size — but only once a full cycle has gone by,
+      // which some team having picked TWICE proves. Waiting for that avoids
+      // thrashing replacement levels while round 1 is still filling in.
+      //
+      // Worth deriving rather than defaulting: the mock fallback assumes 10
+      // teams and a live capture turned out to be 8, which alone would keep
+      // the seating guard below from ever engaging.
+      if (!state.lineupFromApi) {
+        const n = {};
+        let cycled = false;
+        for (const p of d.picks) {
+          if (p.team_id == null) continue;
+          n[p.team_id] = (n[p.team_id] || 0) + 1;
+          if (n[p.team_id] > 1) cycled = true;
+        }
+        const distinct = Object.keys(n).length;
+        if (cycled && distinct >= 4 && distinct !== state.lineup.teams) {
+          state.lineup = Object.assign({}, state.lineup, { teams: distinct });
+          computeReplacement();
+        }
+      }
+
       const teams = state.lineup.teams || 10;
 
       // Phantom guard. The frame parser is heuristic and demonstrably
