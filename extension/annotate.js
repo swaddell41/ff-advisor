@@ -66,7 +66,8 @@
     'border-radius:6px;padding:4px 9px;font:11px Menlo,monospace;cursor:pointer;display:none';
   reco.title = 'Best picks for your roster right now (click to jump to the top player if visible)';
   document.documentElement.appendChild(reco);
-  reco.addEventListener('click', () => {
+  reco.addEventListener('click', (ev) => {
+    if (ev.target && ev.target.id === 'ffa-why') { toggleAudit(); return; }
     if (!state.myCounts && !state.myUserId) {
       const u = window.prompt('Your Sleeper username (for roster-aware recommendations):');
       if (u && u.trim()) {
@@ -79,6 +80,101 @@
     const live = els && [...els].find((e) => e.isConnected);
     if (live) live.scrollIntoView({ block: 'center', behavior: 'smooth' });
   });
+
+  // ── Pick audit panel: the full reasoning behind the current ★ pick ───
+  const auditEl = document.createElement('div');
+  auditEl.style.cssText = 'position:fixed;bottom:62px;left:10px;z-index:2147483646;width:430px;' +
+    'max-height:60vh;overflow-y:auto;background:#0f1115;color:#e6e8ee;border:1px solid #2a2f3a;' +
+    'border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.5);font:11px/1.5 Menlo,monospace;' +
+    'padding:10px 12px;display:none';
+  document.documentElement.appendChild(auditEl);
+  function toggleAudit() {
+    if (auditEl.style.display === 'none') { renderAudit(); auditEl.style.display = 'block'; }
+    else auditEl.style.display = 'none';
+  }
+
+  const kfmt = (v) => (v / 1000).toFixed(1) + 'k';
+  function renderAudit() {
+    const a = state.audit;
+    if (!a) { auditEl.innerHTML = 'No recommendation computed yet.'; return; }
+    const gray = 'color:#8b93a5';
+    let h = '<div style="display:flex;justify-content:space-between;margin-bottom:6px">' +
+      `<strong>⚖ Why this pick — pick #${a.pick}</strong>` +
+      '<span id="ffa-audit-x" style="cursor:pointer;color:#8b93a5">✕</span></div>';
+
+    // Roster & open slots
+    if (a.counts) {
+      const c = (x) => a.counts[x] || 0;
+      const opens = [];
+      if (a.dedicatedOpen) {
+        for (const [pos, n] of Object.entries(a.dedicatedOpen)) if (n > 0) opens.push(`${n} ${pos}`);
+      }
+      if (a.flexOpen > 0) opens.push(`${a.flexOpen} FLEX`);
+      h += `<div style="${gray}">roster: ` +
+        ['QB', 'RB', 'WR', 'TE'].map((x) => c(x) + x).join(' ') +
+        ` · phase: <b style="color:#e6e8ee">${a.phase}</b>` +
+        (opens.length ? ` · open slots: <b style="color:#e6e8ee">${opens.join(', ')}</b>` : '') +
+        '</div>';
+    } else {
+      h += `<div style="color:#f87171">roster unknown — click the strip to set your username</div>`;
+    }
+
+    // Lookahead context
+    if (a.la) {
+      h += `<div style="${gray};margin-bottom:6px">your next pick: <b style="color:#e6e8ee">#${a.la.next}</b>` +
+        ` — the room takes ${a.la.removals} players before then</div>`;
+    } else {
+      h += `<div style="${gray};margin-bottom:6px">lookahead off — draft slot unknown (ESPN or no draft order)</div>`;
+    }
+
+    // Per-position: best now vs likely-there-later vs drop
+    h += '<table style="width:100%;border-collapse:collapse;margin-bottom:6px">' +
+      `<tr style="${gray};text-align:left"><th></th><th>best now</th><th>at your next pick</th><th>vanishes</th></tr>`;
+    for (const row of a.positions) {
+      if (!row.now) continue;
+      const dropTxt = row.drop >= 300
+        ? `<b style="color:#f97316">−${kfmt(row.drop)}</b>`
+        : `<span style="${gray}">−${kfmt(row.drop)}</span>`;
+      const held = !row.eligible
+        ? ` <span style="${gray}">(held: can't fill an open slot)</span>`
+        : '';
+      h += `<tr><td><b>${row.pos}</b></td>` +
+        `<td>${row.now.name} ${kfmt(row.now.value)}</td>` +
+        `<td>${row.nb ? row.nb.name + ' ' + kfmt(row.nb.value) : '<span style="' + gray + '">—</span>'}</td>` +
+        `<td>${dropTxt}${held}</td></tr>`;
+    }
+    h += '</table>';
+
+    // Top-3 score breakdown
+    h += `<div style="${gray};margin-bottom:2px">score = (points over replacement + value vanishing by your next pick + 3% tiebreak) × need:</div>`;
+    a.top.forEach((t, i) => {
+      const star = i === 0 ? '<span style="color:#facc15">★</span> ' : `${i + 1}. `;
+      const parts = [];
+      if (a.phase === 'bench') {
+        parts.push(`${kfmt(t.value)} value`);
+        if (t.drop > 0) parts.push(`+${kfmt(t.drop)} vanishing`);
+      } else {
+        parts.push(`${kfmt(t.vorp)} over ${t.pos} line` +
+          (a.repl && a.repl[t.pos] ? ` (${kfmt(a.repl[t.pos])})` : ''));
+        if (t.drop > 0) parts.push(`+${kfmt(t.drop)} vanishing`);
+      }
+      h += `<div>${star}<b>${t.name}</b> ${t.pos}${t.posRank || ''} — ` +
+        `${parts.join(' ')} × ${t.mult.toFixed(2)} need = <b>${Math.round(t.score)}</b></div>`;
+    });
+
+    // Rules in effect
+    const rules = [];
+    if (a.phase === 'filling starters') rules.push('players who can\'t fill an open starting slot are excluded');
+    if (a.teFilled) rules.push('TE slot filled — TE2s don\'t qualify for flex (their price is slot scarcity, not points)');
+    if (a.usedGatedFallback) rules.push('NO eligible starter-fillers left on the board — showing held players as fallback');
+    if (a.la) rules.push('room model: top values go first; QBs capped at 1/3 of picks in 1QB rooms');
+    if (rules.length) {
+      h += `<div style="${gray};margin-top:6px">rules in effect: ${rules.join(' · ')}</div>`;
+    }
+    auditEl.innerHTML = h;
+    const x = auditEl.querySelector('#ffa-audit-x');
+    if (x) x.addEventListener('click', () => (auditEl.style.display = 'none'));
+  }
 
   // ── Explainer sidebar (auto-opens on load; pill toggles it) ──────────
   const HELP_KEY = 'ffaHideHelp';
@@ -105,8 +201,10 @@
         '<b style="color:#e6e8ee">↑11</b> — falling value: ranked 11 picks earlier than where the draft is now.' +
       '</div>' +
       '<div style="margin-bottom:6px"><span class="ffa-badge ffa-best">★ 5.2k T1</span> ' +
-        '<span style="color:#8b93a5">our top pick for YOUR roster — until your lineup is full, ' +
-        'only players who can fill an open starting slot are recommended</span></div>' +
+        '<span style="color:#8b93a5">our top pick for YOUR roster — weighs points over replacement ' +
+        'AND what will be gone by your next turn; until your lineup is full, only players who can ' +
+        'fill an open starting slot are recommended. Click <b style="color:#7dd3fc">why?</b> on the ' +
+        'strip for the full reasoning behind the current pick.</span></div>' +
       '<div style="margin-bottom:6px"><span class="ffa-badge ffa-good">3.1k T2</span> ' +
         '<span style="color:#8b93a5">next-best two options</span></div>' +
       '<div style="margin-bottom:8px"><span class="ffa-badge ffa-steal">2.0k T3 ↑9</span> ' +
@@ -151,6 +249,9 @@
     currentPick: 1,
     format: 'sf_ppr',
     mode: 'redraft',
+    mySlot: null,        // my draft slot (1-based) — enables lookahead
+    draftType: 'snake',  // 'snake' | 'linear'
+    audit: null,         // last recommend()'s reasoning, for the audit panel
   };
 
   // ── Name normalization ────────────────────────────────────────────────
@@ -239,6 +340,10 @@
       const scoring = (d.metadata && d.metadata.scoring_type) || '';
       state.format = (s.slots_super_flex || 0) > 0 || scoring.includes('2qb') ? 'sf_ppr' : '1qb_ppr';
       state.mode = scoring.includes('dynasty') ? 'dynasty' : 'redraft';
+      state.draftType = d.type || 'snake';
+      if (state.myUserId && d.draft_order && d.draft_order[state.myUserId]) {
+        state.mySlot = d.draft_order[state.myUserId];
+      }
       state.lineup = {
         teams: s.teams || 10,
         qb: s.slots_qb ?? 1,
@@ -535,6 +640,57 @@
     return table[Math.min(n, table.length - 1)];
   }
 
+  // ── Lookahead: what will still be there at MY next pick? ─────────────
+  // Static VORP says who's best *today*; drafts are won on drop-offs — the
+  // value that vanishes between now and your next turn. A position on a
+  // flat shelf (RB26≈RB28) can wait; a position about to cliff can't.
+  function pickSlot(pn) {
+    const t = state.lineup.teams;
+    const rnd = Math.floor((pn - 1) / t);
+    const idx = (pn - 1) % t;
+    return state.draftType === 'snake' && rnd % 2 === 1 ? t - idx : idx + 1;
+  }
+
+  // Returns {next, removals}: my next pick number and how many players the
+  // room takes off the board before it. null if my slot is unknown.
+  function nextMyPickInfo() {
+    if (!state.mySlot || !state.lineup.teams) return null;
+    const last = (state.lineup.rounds || 15) * state.lineup.teams;
+    let removals = 0;
+    for (let pn = state.currentPick; pn <= last; pn++) {
+      if (pickSlot(pn) === state.mySlot) {
+        if (pn === state.currentPick) continue; // that's THIS pick
+        return { next: pn, removals };
+      }
+      removals += 1;
+    }
+    return null;
+  }
+
+  // Best remaining player per position after the room makes `removals`
+  // picks. Opponents modeled as taking our board's top values — except QBs
+  // in 1QB rooms, which real drafters take far slower than value boards
+  // rank them (capped at 1/3 of the run).
+  function expectedNextBest(avail, removals) {
+    const qbCap = state.format.startsWith('sf') ? Infinity : Math.ceil(removals / 3);
+    const gone = new Set();
+    let qbs = 0;
+    for (const p of avail) {
+      if (gone.size >= removals) break;
+      if (p.position === 'QB') {
+        if (qbs >= qbCap) continue;
+        qbs += 1;
+      }
+      gone.add(p.player_id);
+    }
+    const best = {};
+    for (const p of avail) {
+      if (gone.has(p.player_id)) continue;
+      if (!(p.position in best)) best[p.position] = p;
+    }
+    return best;
+  }
+
   // Global recommendation: scored over the ENTIRE board (not just rows the
   // site happens to have rendered), shown in the fixed strip; badges get
   // starred too whenever their rows are in the DOM.
@@ -562,9 +718,11 @@
     const C = state.myCounts;
     let startersOpen = false;
     let canStart = () => true;
+    let dedicatedOpen = null;
+    let flexOpen = 0;
     if (C && L) {
       const cnt = (x) => C[x] || 0;
-      const dedicatedOpen = {
+      dedicatedOpen = {
         QB: Math.max(0, (L.qb + L.sf) - cnt('QB')),
         RB: Math.max(0, L.rb - cnt('RB')),
         WR: Math.max(0, L.wr - cnt('WR')),
@@ -572,7 +730,7 @@
       };
       const flexUsed =
         Math.max(0, cnt('RB') - L.rb) + Math.max(0, cnt('WR') - L.wr) + Math.max(0, cnt('TE') - L.te);
-      const flexOpen = Math.max(0, L.flex - flexUsed);
+      flexOpen = Math.max(0, L.flex - flexUsed);
       startersOpen = flexOpen > 0 || Object.values(dedicatedOpen).some((n) => n > 0);
       // TE2s don't count as flex-fillers: elite-TE market value is
       // scarcity premium for the TE SLOT, not weekly points — a second TE
@@ -592,30 +750,55 @@
     //     worth a small fraction, which naturally schedules them into the
     //     final rounds next to K/DST — where best practice puts them.
     const benchPhase = C && L && !startersOpen;
+
+    // Lookahead: the slice of a player's value that will be GONE by my next
+    // turn. When two open slots compete, "take A now + B next" vs "B now +
+    // A next" reduces exactly to comparing drop-offs — so drop shares the
+    // score with VORP: VORP says how good he is, drop says how little of
+    // him survives waiting. A flat shelf (RB26≈RB28) can wait; a cliff
+    // (WR19→WR26) can't.
+    const avail = state.allPlayers.filter((p) => !state.pickedIds.has(String(p.player_id)));
+    const la = nextMyPickInfo();
+    const nextBest = la ? expectedNextBest(avail, la.removals) : {};
+    const dropOf = (p) => {
+      if (!la) return 0;
+      const nb = nextBest[p.position];
+      return Math.max(0, p.value - (nb ? nb.value : 0));
+    };
+
     const cands = [];
     const gated = []; // can't fill an open starting slot; only shown if nobody can
-    for (const p of state.allPlayers) {
-      if (state.pickedIds.has(String(p.player_id))) continue;
+    for (const p of avail) {
       let score;
+      let vorp = 0;
+      let drop = 0;
+      let mult = 1;
       if (benchPhase) {
         const spareQB = p.position === 'QB' && (C.QB || 0) >= (L.qb + L.sf);
         const spareTE = p.position === 'TE' && teFilled;
-        score = (spareQB || spareTE)
-          ? p.value * 0.12
-          : p.value * needMult(p.position);
+        if (spareQB || spareTE) {
+          mult = 0.12;
+          score = p.value * mult;
+        } else {
+          mult = needMult(p.position);
+          drop = dropOf(p);
+          score = (p.value + drop) * mult;
+        }
       } else {
         let repl = (state.repl && state.repl[p.position]) || 0;
         if (p.position === 'TE' && teFilled && state.repl) {
           repl = Math.max(repl, state.repl.RB || 0, state.repl.WR || 0);
         }
-        const vorp = Math.max(0, p.value - repl);
-        score = (vorp + p.value * 0.03) * needMult(p.position);
+        vorp = Math.max(0, p.value - repl);
+        drop = dropOf(p);
+        mult = needMult(p.position);
+        score = (vorp + drop + p.value * 0.03) * mult;
         if (startersOpen && !canStart(p.position)) {
-          gated.push({ p, score: score * 0.15 });
+          gated.push({ p, score: score * 0.15, vorp, drop, mult });
           continue;
         }
       }
-      cands.push({ p, score });
+      cands.push({ p, score, vorp, drop, mult });
     }
     // Fallback: if no eligible starter-fillers remain on the board (e.g. an
     // open TE slot with every ranked TE drafted), show the gated pool
@@ -623,6 +806,37 @@
     const pool = cands.length ? cands : gated;
     pool.sort((a, b) => b.score - a.score);
     const top = pool.slice(0, 3);
+
+    // Audit trail: everything that went into this recommendation, rendered
+    // on demand by the "why?" panel.
+    state.audit = {
+      pick: state.currentPick,
+      la,
+      phase: !C ? 'roster unknown' : (benchPhase ? 'bench' : 'filling starters'),
+      counts: C ? { ...C } : null,
+      dedicatedOpen,
+      flexOpen,
+      repl: state.repl ? { ...state.repl } : null,
+      teFilled: !!teFilled,
+      positions: ['RB', 'WR', 'TE', 'QB'].map((pos) => {
+        const now = avail.find((p) => p.position === pos) || null;
+        const nb = (la && nextBest[pos]) || null;
+        return {
+          pos,
+          now,
+          nb,
+          drop: now && nb ? Math.max(0, now.value - nb.value) : 0,
+          eligible: benchPhase || !C ? true : canStart(pos),
+        };
+      }),
+      top: top.map((c) => ({
+        name: c.p.name, pos: c.p.position, posRank: c.p.pos_rank,
+        value: c.p.value, vorp: c.vorp || 0, drop: c.drop || 0,
+        mult: c.mult == null ? 1 : c.mult, score: c.score,
+      })),
+      usedGatedFallback: !cands.length && !!gated.length,
+    };
+    if (auditEl && auditEl.style.display !== 'none') renderAudit();
 
     top.forEach((c, i) => {
       const els = state.badges.get(c.p.player_id);
@@ -654,10 +868,15 @@
       } else {
         roster = ' · <span style="color:#f87171">roster unknown — click to set username</span>';
       }
+      const topDrop = top[0].drop || 0;
+      const dropNote = topDrop >= 300
+        ? `<span style="color:#f97316"> −${(topDrop / 1000).toFixed(1)}k if you wait</span>`
+        : '';
       reco.innerHTML =
-        '<span style="color:#facc15">★ PICK: ' + fmt(top[0]) + '</span>' +
+        '<span style="color:#facc15">★ PICK: ' + fmt(top[0]) + '</span>' + dropNote +
         (top[1] ? '<span style="color:#8b93a5"> · then ' + top.slice(1).map(fmt).join(' · ') + '</span>' : '') +
-        roster;
+        roster +
+        ' · <span id="ffa-why" style="color:#7dd3fc;text-decoration:underline;cursor:pointer">why?</span>';
       reco.__topPid = top[0].p.player_id;
       reco.style.display = 'block';
     } else {
