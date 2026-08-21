@@ -80,6 +80,7 @@
   function watchEspnPicks() {
     state.format = '1qb_ppr';
     if (!isExt) return;
+    try {
     chrome.storage.local.get(['espnDraft'], (v) => {
       if (v.espnDraft) setCurrentPick(v.espnDraft.picks.length + 1);
     });
@@ -88,6 +89,7 @@
         setCurrentPick(ch.espnDraft.newValue.picks.length + 1);
       }
     });
+    } catch (_) { /* orphaned after extension reload */ }
   }
 
   function setCurrentPick(n) {

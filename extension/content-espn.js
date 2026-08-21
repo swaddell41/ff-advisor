@@ -30,7 +30,9 @@
     if (publishTimer) return;
     publishTimer = setTimeout(() => {
       publishTimer = null;
-      chrome.storage.local.set({
+      try { chrome.runtime && chrome.runtime.id; } catch (_) { return; }
+      try {
+        chrome.storage.local.set({
         espnDraft: {
           leagueId,
           myTeamId,
@@ -40,6 +42,7 @@
         },
         espnDebugFrames: debugFrames.slice(-80),
       });
+      } catch (_) { /* orphaned after extension reload */ }
     }, 250);
   }
 

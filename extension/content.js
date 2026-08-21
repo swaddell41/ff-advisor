@@ -4,6 +4,8 @@
 (function () {
   const m = window.location.pathname.match(/\/draft\/\w+\/(\d+)/);
   if (m) {
-    chrome.storage.local.set({ draftId: m[1], draftIdSetAt: Date.now() });
+    try {
+      chrome.storage.local.set({ draftId: m[1], draftIdSetAt: Date.now() });
+    } catch (_) { /* orphaned after extension reload — refresh the tab */ }
   }
 })();

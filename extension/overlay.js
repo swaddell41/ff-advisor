@@ -10,7 +10,23 @@
 
 (function () {
   if (window.top !== window) return;          // main frame only
-  if (document.getElementById('ffa-overlay')) return;
+  const stale = document.getElementById('ffa-overlay');
+  if (stale) stale.remove();                  // replace an orphaned card after extension reload
+
+  // When the extension is reloaded, this script becomes an orphan: the DOM
+  // stays but every chrome.* call throws "Extension context invalidated".
+  // Guard all chrome usage and tear the card down instead of erroring.
+  const alive = () => {
+    try { return !!(chrome.runtime && chrome.runtime.id); } catch (_) { return false; }
+  };
+  function safeStore(obj) {
+    if (!alive()) { teardown(); return; }
+    try { chrome.storage.local.set(obj); } catch (_) { teardown(); }
+  }
+  function teardown() {
+    const el = document.getElementById('ffa-overlay');
+    if (el) el.remove();
+  }
 
   const WIDTH = 360;
   const HEIGHT = Math.min(680, Math.round(window.innerHeight * 0.85));
@@ -91,19 +107,21 @@
     frame.style.display = v ? 'none' : 'block';
     collapseBtn.textContent = v ? '▢' : '—';
     collapseBtn.title = v ? 'Expand' : 'Collapse';
-    chrome.storage.local.set({ overlayCollapsed: v });
+    safeStore({ overlayCollapsed: v });
   }
   collapseBtn.addEventListener('click', () => setCollapsed(!collapsed));
   closeBtn.addEventListener('click', () => {
     root.style.display = 'none';
-    chrome.storage.local.set({ overlayHidden: true });
+    safeStore({ overlayHidden: true });
   });
 
   // Reopen when the toolbar icon is clicked (background broadcasts).
+  if (!alive()) { teardown(); return; }
   chrome.storage.onChanged.addListener((ch) => {
+    if (!alive()) { teardown(); return; }
     if (ch.overlayShowRequest) {
       root.style.display = 'block';
-      chrome.storage.local.set({ overlayHidden: false });
+      safeStore({ overlayHidden: false });
     }
   });
 
@@ -126,13 +144,13 @@
   header.addEventListener('pointerup', () => {
     if (!drag) return;
     drag = null;
-    chrome.storage.local.set({
+    safeStore({
       overlayPos: { left: root.style.left, top: root.style.top },
     });
   });
 
   // ── Restore saved state ───────────────────────────────────────────────
-  chrome.storage.local.get(['overlayPos', 'overlayCollapsed', 'overlayHidden'], (v) => {
+  try { chrome.storage.local.get(['overlayPos', 'overlayCollapsed', 'overlayHidden'], (v) => {
     if (v.overlayPos && v.overlayPos.left) {
       root.style.left = v.overlayPos.left;
       root.style.top = v.overlayPos.top;
@@ -140,5 +158,5 @@
     }
     if (v.overlayCollapsed) setCollapsed(true);
     if (v.overlayHidden) root.style.display = 'none';
-  });
+  }); } catch (_) { teardown(); }
 })();
