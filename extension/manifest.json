@@ -1,41 +1,80 @@
 {
   "manifest_version": 3,
-  "name": "Dynasty Advisor — Draft Assistant",
-  "version": "0.2.0",
+  "name": "Dynasty Advisor \u2014 Draft Assistant",
+  "version": "0.2.1",
   "description": "Live draft board for Sleeper and ESPN drafts: multi-source values, tier breaks, roster needs, and falling-value alerts.",
-  "permissions": ["sidePanel", "storage"],
+  "permissions": [
+    "sidePanel",
+    "storage"
+  ],
   "host_permissions": [
     "https://api.sleeper.app/*",
     "https://ff-advisor-sam-waddells-projects.vercel.app/*"
   ],
-  "side_panel": { "default_path": "panel.html" },
-  "action": { "default_title": "Show draft assistant" },
-  "background": { "service_worker": "background.js" },
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "action": {
+    "default_title": "Show draft assistant"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
   "web_accessible_resources": [
     {
-      "resources": ["panel.html", "panel.js", "panel.css"],
-      "matches": ["https://sleeper.com/*", "https://fantasy.espn.com/*", "https://*.espn.com/*"]
+      "resources": [
+        "panel.html",
+        "panel.js",
+        "panel.css"
+      ],
+      "matches": [
+        "https://sleeper.com/*",
+        "https://fantasy.espn.com/*",
+        "https://*.espn.com/*"
+      ]
     }
   ],
   "content_scripts": [
     {
-      "matches": ["https://sleeper.com/draft/*"],
-      "js": ["content.js", "annotate.js", "overlay.js"]
+      "matches": [
+        "https://sleeper.com/draft/*"
+      ],
+      "js": [
+        "content.js",
+        "annotate.js",
+        "overlay.js"
+      ]
     },
     {
-      "matches": ["https://fantasy.espn.com/*draft*", "https://*.espn.com/*draft*"],
-      "js": ["annotate.js", "overlay.js"]
+      "matches": [
+        "https://fantasy.espn.com/*draft*",
+        "https://*.espn.com/*draft*"
+      ],
+      "js": [
+        "annotate.js",
+        "overlay.js"
+      ]
     },
     {
-      "matches": ["https://fantasy.espn.com/*draft*", "https://*.espn.com/*draft*"],
-      "js": ["inject-espn.js"],
+      "matches": [
+        "https://fantasy.espn.com/*draft*",
+        "https://*.espn.com/*draft*"
+      ],
+      "js": [
+        "inject-espn.js"
+      ],
       "run_at": "document_start",
       "all_frames": true,
       "world": "MAIN"
     },
     {
-      "matches": ["https://fantasy.espn.com/*draft*", "https://*.espn.com/*draft*"],
-      "js": ["content-espn.js"],
+      "matches": [
+        "https://fantasy.espn.com/*draft*",
+        "https://*.espn.com/*draft*"
+      ],
+      "js": [
+        "content-espn.js"
+      ],
       "run_at": "document_start",
       "all_frames": true
     }

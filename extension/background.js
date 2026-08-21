@@ -10,3 +10,25 @@ chrome.action.onClicked.addListener((tab) => {
     chrome.sidePanel.open({ tabId: tab.id }).catch(console.error);
   }
 });
+
+// Network proxy for content scripts. Their fetches run under the PAGE's
+// origin and are blocked by the site's Content-Security-Policy (Sleeper and
+// ESPN both restrict connect-src). The service worker fetches under the
+// extension origin with host_permissions — immune to page CSP and CORS.
+const ALLOWED = [
+  'https://api.sleeper.app/',
+  'https://ff-advisor-sam-waddells-projects.vercel.app/',
+];
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || msg.type !== 'ffa-fetch') return false;
+  const url = String(msg.url || '');
+  if (!ALLOWED.some((p) => url.startsWith(p))) {
+    sendResponse({ ok: false, error: 'url not allowed' });
+    return false;
+  }
+  fetch(url)
+    .then(async (r) => sendResponse({ ok: r.ok, status: r.status, json: await r.json() }))
+    .catch((e) => sendResponse({ ok: false, error: String(e) }));
+  return true; // async response
+});

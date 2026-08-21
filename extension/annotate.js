@@ -26,6 +26,37 @@
   const SLEEPER = 'https://api.sleeper.app';
 
   const isSleeper = location.hostname.includes('sleeper.com');
+
+  // All network goes through the background worker when running as an
+  // extension — page CSP (Sleeper/ESPN restrict connect-src) blocks direct
+  // content-script fetches.
+  function xfetch(url) {
+    if (!isExt || !chrome.runtime || !chrome.runtime.sendMessage || TEST) {
+      return fetch(url).then((r) => r.json());
+    }
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.runtime.sendMessage({ type: 'ffa-fetch', url }, (resp) => {
+          if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+          if (!resp || !resp.ok) return reject(new Error((resp && resp.error) || 'fetch failed'));
+          resolve(resp.json);
+        });
+      } catch (e) { reject(e); }
+    });
+  }
+
+  // On-page status pill: makes the annotator's state visible instead of
+  // failing silently. Click to dismiss.
+  const pill = document.createElement('div');
+  pill.style.cssText = 'position:fixed;bottom:10px;left:10px;z-index:2147483645;' +
+    'background:rgba(15,17,21,.92);color:#8b93a5;border:1px solid #2a2f3a;' +
+    'border-radius:6px;padding:3px 8px;font:11px Menlo,monospace;cursor:pointer';
+  pill.textContent = 'FFA: loading board…';
+  pill.title = 'Draft assistant annotator status (click to hide)';
+  pill.addEventListener('click', () => pill.remove());
+  document.documentElement.appendChild(pill);
+  function setPill(t) { pill.textContent = 'FFA: ' + t; }
+
   const state = {
     byName: new Map(),   // normalized name -> [player, ...]
     badges: new Map(),   // player_id -> Set<badge el>
@@ -47,8 +78,7 @@
 
   // ── Board ─────────────────────────────────────────────────────────────
   async function loadBoard() {
-    const r = await fetch(`${API_BASE}/api/draftboard?format=${state.format}&mode=${state.mode}`);
-    const board = await r.json();
+    const board = await xfetch(`${API_BASE}/api/draftboard?format=${state.format}&mode=${state.mode}`);
     state.byName.clear();
     for (const p of board.players) {
       const k = norm(p.name);
@@ -62,7 +92,7 @@
     const m = location.pathname.match(/\/draft\/\w+\/(\d+)/);
     if (!m) return;
     try {
-      const d = await (await fetch(`${SLEEPER}/v1/draft/${m[1]}`)).json();
+      const d = await xfetch(`${SLEEPER}/v1/draft/${m[1]}`);
       const s = d.settings || {};
       const scoring = (d.metadata && d.metadata.scoring_type) || '';
       state.format = (s.slots_super_flex || 0) > 0 || scoring.includes('2qb') ? 'sf_ppr' : '1qb_ppr';
@@ -70,7 +100,7 @@
       // poll pick count for steal deltas
       setInterval(async () => {
         try {
-          const picks = await (await fetch(`${SLEEPER}/v1/draft/${m[1]}/picks`)).json();
+          const picks = await xfetch(`${SLEEPER}/v1/draft/${m[1]}/picks`);
           setCurrentPick((picks || []).length + 1);
         } catch (_) {}
       }, 5000);
@@ -172,6 +202,8 @@
       // Ambiguous names: skip unless exactly one candidate (safe default).
       if (matches.length === 1) annotate(node, matches[0]);
     }
+    setPill(`${state.byName.size} players on board · ${state.badges.size} matched on page` +
+      (state.badges.size === 0 ? ' — no names matched yet (scrolling the player list helps)' : ''));
   }
 
   let scanScheduled = false;
@@ -186,9 +218,14 @@
 
   // ── Boot ──────────────────────────────────────────────────────────────
   (async function boot() {
-    if (isSleeper) await detectSleeperDraft();
-    else watchEspnPicks();
-    await loadBoard();
+    try {
+      if (isSleeper) await detectSleeperDraft();
+      else watchEspnPicks();
+      await loadBoard();
+    } catch (e) {
+      setPill('board fetch FAILED — ' + e.message);
+      return;
+    }
     scan();
     new MutationObserver(scheduleScan).observe(document.documentElement, {
       childList: true,
