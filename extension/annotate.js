@@ -353,6 +353,42 @@
     } catch (_) {}
   }
 
+  // ── League size, observed ─────────────────────────────────────────────
+  // The draft that is actually running is the authority on how many teams
+  // are in it — not a settings field, which can be stale, absent (ESPN
+  // mocks expose no league API) or simply wrong.
+  //
+  // Every team picks exactly once per round, so the number of distinct
+  // teams IS the league size. Trusted only once some team has picked
+  // TWICE: that proves a full cycle completed and therefore that every
+  // team has already appeared. Without that check a partial first round
+  // would report a count that is merely "how many have picked so far".
+  //
+  // Shared by both platforms so they cannot drift — Sleeper passes
+  // draft_slot, ESPN passes team_id.
+  function observedTeamCount(keys) {
+    const n = Object.create(null);
+    let cycled = false;
+    for (const k of keys) {
+      if (k == null || k === '') continue;
+      const key = String(k);
+      n[key] = (n[key] || 0) + 1;
+      if (n[key] > 1) cycled = true;
+    }
+    const distinct = Object.keys(n).length;
+    // Floor of 4: fewer than that is not a real draft, and guards against a
+    // malformed feed collapsing replacement levels to nonsense.
+    return cycled && distinct >= 4 ? distinct : null;
+  }
+
+  // Adopt an observed count when it disagrees with whatever settings said.
+  function applyTeamCount(observed) {
+    if (!observed || observed === state.lineup.teams) return false;
+    state.lineup = Object.assign({}, state.lineup, { teams: observed });
+    computeReplacement();
+    return true;
+  }
+
   // ── Draft context (format/mode + current pick for steal deltas) ──────
   async function detectSleeperDraft() {
     const m = location.pathname.match(/\/draft\/\w+\/(\d+)/);
@@ -398,6 +434,9 @@
             (slotCounts[s] = slotCounts[s] || {})[pos] = (slotCounts[s][pos] || 0) + 1;
           }
           state.slotCounts = slotCounts;
+          // The running draft outranks settings.teams. Applied before the
+          // block below, which uses lineup.teams to date my QB1's round.
+          applyTeamCount(observedTeamCount((picks || []).map((p) => p.draft_slot)));
           if (state.myUserId) {
             const counts = {};
             let qbRound = null;
@@ -485,9 +524,6 @@
         }
       } catch (_) { /* mock lobby, logged out, or blocked — fallback below */ }
     }
-    // Remember whether the lineup is authoritative: if it is not, team
-    // count gets derived from the picks themselves (see applyEspn).
-    state.lineupFromApi = leagueOk;
 
     // Mock-lobby fallback. Without it the lineup keeps the Sleeper-flavoured
     // defaults (15 rounds, no K/DST), so replacement levels and every snake
@@ -505,29 +541,11 @@
     state.draftType = 'snake';   // ESPN mocks and redraft leagues are snake
 
     const applyEspn = (d) => {
-      // League size from the draft itself when settings were unreadable.
-      // Every team picks exactly once per round, so the number of distinct
-      // teams IS the league size — but only once a full cycle has gone by,
-      // which some team having picked TWICE proves. Waiting for that avoids
-      // thrashing replacement levels while round 1 is still filling in.
-      //
-      // Worth deriving rather than defaulting: the mock fallback assumes 10
-      // teams and a live capture turned out to be 8, which alone would keep
-      // the seating guard below from ever engaging.
-      if (!state.lineupFromApi) {
-        const n = {};
-        let cycled = false;
-        for (const p of d.picks) {
-          if (p.team_id == null) continue;
-          n[p.team_id] = (n[p.team_id] || 0) + 1;
-          if (n[p.team_id] > 1) cycled = true;
-        }
-        const distinct = Object.keys(n).length;
-        if (cycled && distinct >= 4 && distinct !== state.lineup.teams) {
-          state.lineup = Object.assign({}, state.lineup, { teams: distinct });
-          computeReplacement();
-        }
-      }
+      // The running draft outranks settings.size, and is the ONLY source in
+      // a mock, where the league API exposes nothing. A live capture was an
+      // 8-team draft against our 10-team default — which alone would have
+      // kept the seating guard below from ever engaging.
+      applyTeamCount(observedTeamCount(d.picks.map((p) => p.team_id)));
 
       const teams = state.lineup.teams || 10;
 

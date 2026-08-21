@@ -1,27 +1,48 @@
-// Team-count derivation, driven by the real arrival order from the capture.
-const SEQ = ['8','1','2','3','7','5','5','7','3','2','1','8','6','4','4','6','8','1','2','3'];
-function derive(teamIds) {
-  const n = {}; let cycled = false;
-  for (const t of teamIds) { n[t] = (n[t] || 0) + 1; if (n[t] > 1) cycled = true; }
-  const distinct = Object.keys(n).length;
-  return (cycled && distinct >= 4) ? distinct : null;
-}
+// observedTeamCount / applyTeamCount, lifted verbatim from annotate.js and
+// driven with BOTH platforms' data shapes. Sleeper is the reference
+// implementation, so its cases are regression tests first and foremost.
+const fs = require('fs');
+const src = fs.readFileSync('C:/Users/Sam/ff-advisor/extension/annotate.js', 'utf8');
+const body = src.slice(src.indexOf('function observedTeamCount'), src.indexOf('// ── Draft context'));
+const state = { lineup: { teams: 10 } };
+const { observedTeamCount, applyTeamCount } = new Function('state', 'computeReplacement',
+  body + '; return {observedTeamCount, applyTeamCount};')(state, () => {});
+
 let fail = 0;
 const ok = (l, g, w) => { const p = JSON.stringify(g) === JSON.stringify(w);
   if (!p) fail++; console.log(`${p?'PASS':'FAIL'}  ${l}: ${JSON.stringify(g)}${p?'':' want '+JSON.stringify(w)}`); };
 
-ok('full capture -> 8 teams', derive(SEQ), 8);
-// Partial round: must NOT guess, since no team has cycled yet.
-ok('4 picks in, no cycle -> withholds', derive(SEQ.slice(0,4)), null);
-ok('6 picks in, still no cycle -> withholds', derive(SEQ.slice(0,6)), null);
-// The turn (5,5) is a cycle signal but only 6 teams seen — the danger case.
-ok('at the turn with 6 distinct seen -> reports 6 (self-corrects later)', derive(SEQ.slice(0,7)), 6);
-ok('once all 8 have appeared -> 8', derive(SEQ.slice(0,14)), 8);
-// A clean 10-team draft from pick 1 must land on 10, not stop early.
-const TEN = [];
-for (let r = 0; r < 3; r++) { const o = ['1','2','3','4','5','6','7','8','9','10'];
-  TEN.push(...(r % 2 ? o.slice().reverse() : o)); }
-ok('10-team snake from pick 1 -> 10', derive(TEN), 10);
-ok('10-team, only 9 picks in -> withholds', derive(TEN.slice(0,9)), null);
+// ── ESPN: team_id, from the real captured arrival order (8-team snake) ──
+const ESPN = ['8','1','2','3','7','5','5','7','3','2','1','8','6','4','4','6','8','1','2','3'];
+ok('ESPN capture -> 8', observedTeamCount(ESPN), 8);
+ok('ESPN partial round withholds', observedTeamCount(ESPN.slice(0,6)), null);
+ok('ESPN once every team seen -> 8', observedTeamCount(ESPN.slice(0,14)), 8);
+
+// ── Sleeper: draft_slot is a NUMBER, not a string — must not double-count ──
+const snake = (teams, rounds) => { const out = [];
+  for (let r = 0; r < rounds; r++) { const o = Array.from({length: teams}, (_, i) => i + 1);
+    out.push(...(r % 2 ? o.reverse() : o)); } return out; };
+ok('Sleeper 12-team numeric slots -> 12', observedTeamCount(snake(12, 3)), 12);
+ok('Sleeper 10-team -> 10', observedTeamCount(snake(10, 2)), 10);
+ok('Sleeper mixed number/string keys do not double-count',
+   observedTeamCount([1, '1', 2, '2', 3, '3', 4, '4', 1, 2, 3, 4]), 4);
+ok('Sleeper round 1 only (no cycle) withholds', observedTeamCount(snake(12, 1)), null);
+ok('Sleeper linear draft (same order each round) -> 12',
+   observedTeamCount([...Array(12).keys()].map(i=>i+1).concat([...Array(12).keys()].map(i=>i+1))), 12);
+
+// ── Robustness ──
+ok('empty feed withholds', observedTeamCount([]), null);
+ok('nulls / blanks ignored', observedTeamCount([null, '', undefined, 1, 2, 3, 4, 1]), 4);
+ok('3 teams is below the floor', observedTeamCount([1,2,3,1,2,3]), null);
+ok('sparse slots (a team never picked) counts only who appeared',
+   observedTeamCount([1,2,4,5,1,2,4,5]), 4);
+
+// ── applyTeamCount: only overrides on a real disagreement ──
+state.lineup.teams = 10;
+ok('adopts observed 8 over configured 10', [applyTeamCount(8), state.lineup.teams], [true, 8]);
+ok('no-op when they agree', [applyTeamCount(8), state.lineup.teams], [false, 8]);
+ok('no-op on null (not yet confident) — keeps configured',
+   [applyTeamCount(null), state.lineup.teams], [false, 8]);
+
 console.log(fail ? `\n${fail} FAILED` : '\nall assertions passed');
 process.exit(fail ? 1 : 0);
