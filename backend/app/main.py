@@ -39,7 +39,9 @@ app.add_middleware(
     # The Chrome extension's side panel (chrome-extension:// origin) and
     # local extension testing. Extension fetches with host_permissions
     # bypass CORS anyway; this keeps standalone/panel testing honest.
-    allow_origin_regex=r"chrome-extension://.*|http://localhost:\d+",
+    # Draft-site origins: the in-row annotator fetches the (public) draft
+    # board from content scripts, which inherit the page's origin.
+    allow_origin_regex=r"chrome-extension://.*|http://localhost:\d+|https://(www\.)?sleeper\.com|https://([a-z0-9-]+\.)?espn\.com",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

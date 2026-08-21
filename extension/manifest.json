@@ -20,11 +20,11 @@
   "content_scripts": [
     {
       "matches": ["https://sleeper.com/draft/*"],
-      "js": ["content.js", "overlay.js"]
+      "js": ["content.js", "annotate.js", "overlay.js"]
     },
     {
       "matches": ["https://fantasy.espn.com/*draft*", "https://*.espn.com/*draft*"],
-      "js": ["overlay.js"]
+      "js": ["annotate.js", "overlay.js"]
     },
     {
       "matches": ["https://fantasy.espn.com/*draft*", "https://*.espn.com/*draft*"],
