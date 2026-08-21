@@ -52,14 +52,73 @@
     'background:rgba(15,17,21,.92);color:#8b93a5;border:1px solid #2a2f3a;' +
     'border-radius:6px;padding:3px 8px;font:11px Menlo,monospace;cursor:pointer';
   pill.textContent = 'FFA: loading board…';
-  pill.title = 'Draft assistant annotator status (click to hide)';
-  pill.addEventListener('click', () => pill.remove());
+  pill.title = 'Draft assistant status — click for the legend';
+  pill.addEventListener('click', () => toggleHelp());
   document.documentElement.appendChild(pill);
   function setPill(t) { pill.textContent = 'FFA: ' + t; }
 
+  // ── Explainer sidebar (auto-opens on load; pill toggles it) ──────────
+  const HELP_KEY = 'ffaHideHelp';
+  let helpEl = null;
+
+  function buildHelp() {
+    const el = document.createElement('div');
+    el.id = 'ffa-help';
+    el.style.cssText =
+      'position:fixed;top:70px;right:12px;width:270px;z-index:2147483645;' +
+      'background:#0f1115;color:#e6e8ee;border:1px solid #2a2f3a;border-radius:10px;' +
+      'box-shadow:0 8px 30px rgba(0,0,0,.5);font:12px/1.55 Menlo,monospace;padding:12px 14px';
+    el.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+        '<strong style="font-size:13px">⚡ What the numbers mean</strong>' +
+        '<span id="ffa-help-x" style="cursor:pointer;color:#8b93a5">✕</span>' +
+      '</div>' +
+      '<div style="margin-bottom:8px"><span class="ffa-badge">1.8k T3 ↑11</span></div>' +
+      '<div style="color:#8b93a5;margin-bottom:8px">' +
+        '<b style="color:#e6e8ee">1.8k</b> — our value for this player on a 0–10k scale ' +
+        '(blend of RosterAudit + real-trade market data, refreshed daily; redraft values in seasonal drafts).<br>' +
+        '<b style="color:#e6e8ee">T3</b> — tier at the position. Big value gaps set the tier breaks; ' +
+        'drafting before a tier ends beats reaching into the next one.<br>' +
+        '<b style="color:#e6e8ee">↑11</b> — falling value: ranked 11 picks earlier than where the draft is now.' +
+      '</div>' +
+      '<div style="margin-bottom:6px"><span class="ffa-badge ffa-best">★ 5.2k T1</span> ' +
+        '<span style="color:#8b93a5">best available right now — our top pick</span></div>' +
+      '<div style="margin-bottom:6px"><span class="ffa-badge ffa-good">3.1k T2</span> ' +
+        '<span style="color:#8b93a5">next-best two options</span></div>' +
+      '<div style="margin-bottom:8px"><span class="ffa-badge ffa-steal">2.0k T3 ↑9</span> ' +
+        '<span style="color:#8b93a5">green = value falling to you</span></div>' +
+      '<div style="color:#8b93a5;margin-bottom:10px">Hover any badge for full detail. ' +
+        'No badge = outside our ~190 ranked players.</div>' +
+      '<label style="color:#8b93a5;display:block;margin-bottom:8px;cursor:pointer">' +
+        '<input type="checkbox" id="ffa-help-hide" style="vertical-align:middle"> don\'t show automatically</label>' +
+      '<div id="ffa-help-ok" style="text-align:center;border:1px solid #2a2f3a;border-radius:6px;' +
+        'padding:5px;cursor:pointer;color:#7dd3fc">Got it</div>';
+    document.documentElement.appendChild(el);
+    el.querySelector('#ffa-help-x').addEventListener('click', () => (el.style.display = 'none'));
+    el.querySelector('#ffa-help-ok').addEventListener('click', () => (el.style.display = 'none'));
+    el.querySelector('#ffa-help-hide').addEventListener('change', (e) => {
+      try { localStorage.setItem(HELP_KEY, e.target.checked ? '1' : ''); } catch (_) {}
+    });
+    try {
+      el.querySelector('#ffa-help-hide').checked = localStorage.getItem(HELP_KEY) === '1';
+    } catch (_) {}
+    return el;
+  }
+
+  function toggleHelp(force) {
+    if (!helpEl) helpEl = buildHelp();
+    const show = force !== undefined ? force : helpEl.style.display === 'none';
+    helpEl.style.display = show ? 'block' : 'none';
+  }
+
+  let autoShowHelp = true;
+  try { autoShowHelp = localStorage.getItem(HELP_KEY) !== '1'; } catch (_) {}
+
   const state = {
     byName: new Map(),   // normalized name -> [player, ...]
+    byEspn: new Map(),   // espn_id -> player
     badges: new Map(),   // player_id -> Set<badge el>
+    pickedIds: new Set(),// sleeper ids already drafted
     currentPick: 1,
     format: 'sf_ppr',
     mode: 'redraft',
@@ -80,10 +139,12 @@
   async function loadBoard() {
     const board = await xfetch(`${API_BASE}/api/draftboard?format=${state.format}&mode=${state.mode}`);
     state.byName.clear();
+    state.byEspn.clear();
     for (const p of board.players) {
       const k = norm(p.name);
       if (!state.byName.has(k)) state.byName.set(k, []);
       state.byName.get(k).push(p);
+      if (p.espn_id) state.byEspn.set(String(p.espn_id), p);
     }
   }
 
@@ -101,7 +162,9 @@
       setInterval(async () => {
         try {
           const picks = await xfetch(`${SLEEPER}/v1/draft/${m[1]}/picks`);
+          state.pickedIds = new Set((picks || []).map((p) => String(p.player_id)));
           setCurrentPick((picks || []).length + 1);
+          recommend();
         } catch (_) {}
       }, 5000);
     } catch (_) {}
@@ -111,13 +174,19 @@
     state.format = '1qb_ppr';
     if (!isExt) return;
     try {
+    const applyEspn = (d) => {
+      state.pickedIds = new Set(
+        d.picks.map((p) => state.byEspn.get(String(p.espn_id)))
+          .filter(Boolean).map((p) => String(p.player_id))
+      );
+      setCurrentPick(d.picks.length + 1);
+      recommend();
+    };
     chrome.storage.local.get(['espnDraft'], (v) => {
-      if (v.espnDraft) setCurrentPick(v.espnDraft.picks.length + 1);
+      if (v.espnDraft) applyEspn(v.espnDraft);
     });
     chrome.storage.onChanged.addListener((ch) => {
-      if (ch.espnDraft && ch.espnDraft.newValue) {
-        setCurrentPick(ch.espnDraft.newValue.picks.length + 1);
-      }
+      if (ch.espnDraft && ch.espnDraft.newValue) applyEspn(ch.espnDraft.newValue);
     });
     } catch (_) { /* orphaned after extension reload */ }
   }
@@ -155,6 +224,17 @@
     }
     .ffa-badge.ffa-steal { color: #4ade80; border-color: rgba(74, 222, 128, 0.45); }
     .ffa-badge.ffa-t1 { color: #facc15; border-color: rgba(250, 204, 21, 0.45); }
+    .ffa-badge.ffa-best {
+      color: #0f1115 !important;
+      background: #facc15 !important;
+      border-color: #facc15 !important;
+      box-shadow: 0 0 8px rgba(250, 204, 21, 0.75);
+    }
+    .ffa-badge.ffa-best::before { content: '★  '; }
+    .ffa-badge.ffa-good {
+      border-color: rgba(74, 222, 128, 0.9) !important;
+      box-shadow: 0 0 5px rgba(74, 222, 128, 0.45);
+    }
   `;
   document.documentElement.appendChild(css);
 
@@ -273,6 +353,24 @@
     }
     setPill(`${state.byName.size} players on board · ${state.badges.size} matched on page` +
       (state.badges.size === 0 ? ' — no names matched yet (scrolling the player list helps)' : ''));
+    recommend();
+  }
+
+  // Mark the strongest available players so the next pick is obvious:
+  // gold star = best on the board right now, green ring = next two.
+  function recommend() {
+    document.querySelectorAll('.ffa-badge.ffa-best, .ffa-badge.ffa-good')
+      .forEach((el) => el.classList.remove('ffa-best', 'ffa-good'));
+    const cands = [];
+    for (const [pid, els] of state.badges) {
+      const live = [...els].filter((e) => e.isConnected);
+      if (!live.length) { state.badges.delete(pid); continue; }
+      if (state.pickedIds.has(String(pid))) continue;
+      cands.push({ p: live[0].__ffaPlayer, els: live });
+    }
+    cands.sort((a, b) => b.p.value - a.p.value);
+    if (cands[0]) cands[0].els.forEach((e) => e.classList.add('ffa-best'));
+    cands.slice(1, 3).forEach((c) => c.els.forEach((e) => e.classList.add('ffa-good')));
   }
 
   let scanScheduled = false;
@@ -295,6 +393,7 @@
       setPill('board fetch FAILED — ' + e.message);
       return;
     }
+    if (autoShowHelp) toggleHelp(true);
     scan();
     new MutationObserver(scheduleScan).observe(document.documentElement, {
       childList: true,
