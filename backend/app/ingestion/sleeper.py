@@ -27,7 +27,9 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.sleeper.app"
 CACHE_TTL_SECONDS = 3600          # 1 hour — for rosters, current-week data
-PLAYERS_TTL_SECONDS = 7 * 86400   # 7 days — /v1/players/nfl is huge
+# Daily — the draft assistant leans on team/status/injury being current
+# (cuts, retirements, and injury designations move fast in draft season).
+PLAYERS_TTL_SECONDS = 86400
 REQUEST_DELAY_SECONDS = 0.05       # polite rate limiting
 
 

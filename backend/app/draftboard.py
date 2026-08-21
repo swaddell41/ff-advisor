@@ -68,6 +68,9 @@ def draft_board(conn: Connection, fmt: str = "sf_ppr", mode: str = "redraft") ->
               AND adp.format = ? AND adp.snapshot_date = ?
         WHERE vs.source = ? AND vs.format = ? AND vs.snapshot_date = ?
           AND vs.value > 0
+          -- Only draftable players: Inactive on Sleeper = out of the NFL
+          -- (retired/cut). IR/PUP players stay — they're stashable.
+          AND (pl.status IS NULL OR pl.status != 'Inactive')
         ORDER BY vs.value DESC
         """,
         (fmt, dyn_snap, fmt, mkt_snap, fmt, adp_snap, rank_source, fmt, rank_snap),

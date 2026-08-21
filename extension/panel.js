@@ -129,14 +129,28 @@ async function resolveUser(username) {
   render();
 }
 
+let boardLoadedAt = 0;
+
 async function loadBoard() {
   const r = await fetch(`${API_BASE}/api/draftboard?format=${state.format}&mode=${state.mode}`);
   state.board = await r.json();
+  boardLoadedAt = Date.now();
   state.espnMap = new Map();
   for (const p of state.board.players) {
     if (p.espn_id) state.espnMap.set(String(p.espn_id), p);
   }
 }
+
+// A panel left open across hours should pick up the daily value/player
+// refresh without a reconnect.
+setInterval(async () => {
+  if (!state.board || Date.now() - boardLoadedAt < 60 * 60 * 1000) return;
+  try {
+    await loadBoard();
+    refreshPickedIds();
+    render();
+  } catch (_) { /* keep the stale board rather than blanking */ }
+}, 10 * 60 * 1000);
 
 // ── Sleeper mode ────────────────────────────────────────────────────────────
 

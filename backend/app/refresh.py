@@ -41,6 +41,7 @@ def refresh_current_leagues(conn: Connection) -> dict:
     """Refresh rosters/trades/traded-picks for the current leagues. Returns a summary."""
     from scripts.ingest_leagues import (
         ingest_managers,
+        ingest_players,
         ingest_traded_picks,
         ingest_trades,
     )
@@ -48,6 +49,10 @@ def refresh_current_leagues(conn: Connection) -> dict:
     client = SleeperClient(conn)
     league_ids = _all_current_league_ids(conn)
     new_trades = 0
+
+    # Keep the player pool current (teams, status, injuries) — TTL-guarded,
+    # so this is a no-op unless the cached blob is older than a day.
+    ingest_players(conn, client)
 
     for league_id in league_ids:
         season_row = conn.execute(
