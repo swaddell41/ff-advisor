@@ -148,9 +148,9 @@
     Object.values(obj).forEach((v) => { if (v && typeof v === 'object') scanJson(v); });
   }
 
-  document.addEventListener('ffa-espn-frame', (ev) => {
+  function handleFrame(detail) {
     let msg;
-    try { msg = JSON.parse(ev.detail); } catch (_) { return; }
+    try { msg = JSON.parse(detail); } catch (_) { return; }
     if (msg && msg.oversize) { oversize += 1; publish(); return; }
     if (!msg || typeof msg.data !== 'string') return;
     framesSeen += 1;
@@ -174,6 +174,65 @@
     }
 
     parseFrame(text);
+    publish();
+  }
+
+  // Rehydrate the previous session's picks BEFORE processing any frame.
+  //
+  // The tap only ever sees picks made after it connects, so without this a
+  // refresh or an extension reload mid-draft drops the entire pick history
+  // and the board shows already-drafted players as available for the rest
+  // of the draft.
+  //
+  // This is the only source that works for a MOCK: ESPN's draftDetail API
+  // is never written to by a practice draft (it reports the parent
+  // league's real, unstarted draft — every slot playerId -1), and the INIT
+  // frame that does carry live state is an opaque base64 binary blob. We
+  // already observed every pick; the only thing missing was remembering.
+  //
+  // Scoped to the same leagueId so joining a different draft starts clean,
+  // and time-boxed so a stale draft from days ago cannot leak in.
+  let hydrated = false;
+  const pending = [];
+
+  function hydrate(done) {
+    try {
+      if (!chrome.runtime || !chrome.runtime.id) return done();
+      chrome.storage.local.get(['espnDraft'], (v) => {
+        try {
+          const prev = v && v.espnDraft;
+          const FRESH_MS = 12 * 3600 * 1000;
+          if (prev && String(prev.leagueId) === String(leagueId)
+              && Array.isArray(prev.picks)
+              && Date.now() - (prev.updatedAt || 0) < FRESH_MS) {
+            for (const p of prev.picks) {
+              const key = String(p.espn_id);
+              if (!key || seen.has(key)) continue;
+              seen.add(key);
+              picks.push({
+                espn_id: key,
+                team_id: p.team_id != null ? String(p.team_id) : null,
+                pick_no: picks.length + 1,
+              });
+            }
+          }
+        } catch (_) { /* corrupt stored state must not block the draft */ }
+        done();
+      });
+    } catch (_) { done(); }
+  }
+
+  // Frames arriving before hydration finishes are queued, not dropped:
+  // storage is async but the socket is not, and a pick landing in that
+  // window would otherwise be lost or ordered ahead of the history.
+  document.addEventListener('ffa-espn-frame', (ev) => {
+    if (!hydrated) { pending.push(ev.detail); return; }
+    handleFrame(ev.detail);
+  });
+
+  hydrate(() => {
+    hydrated = true;
+    for (const d of pending.splice(0)) handleFrame(d);
     publish();
   });
 
