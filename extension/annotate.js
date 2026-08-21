@@ -382,29 +382,33 @@
   function captureDomSample() {
     if (!isExt) return;
     const now = Date.now();
-    if (now - lastDomSample < 10000) return;
+    if (now - lastDomSample < 8000) return;
     lastDomSample = now;
     try {
       const clip = (el, n) => (el && el.outerHTML ? el.outerHTML.slice(0, n) : null);
-      // Which tab is showing tells me whether the rows below are the
-      // player list or the pick history.
-      const tabs = [...document.querySelectorAll('[role="tab"], nav a, nav button')]
-        .map((t) => (t.textContent || '').trim())
-        .filter((t) => t && t.length < 30)
-        .slice(0, 10);
-      const rows = [...document.querySelectorAll('tr')];
+      const txt = (el) => (el && el.textContent ? el.textContent.trim().slice(0, 120) : '');
+
+      // ESPN's main tables are FixedDataTable: divs with role=row /
+      // role=gridcell, NOT <tr>. The only <tr> on the page belong to the
+      // sidebar (pick queue, roster), which is why an earlier sample of
+      // <tr> captured nothing useful.
+      const roleRows = [...document.querySelectorAll('[role="row"]')];
+      const active = document.querySelector('[role="tab"][aria-selected="true"]');
+
       const sample = {
         at: now,
-        tabs,
-        rowCount: rows.length,
-        rows: rows.slice(0, 3).map((r) => clip(r, 1400)),
-        // Anything that looks like a pick-history line: a round.pick label
-        // such as "1.04" or "R1 P4" is the giveaway.
-        historyish: [...document.querySelectorAll('li, tr, div')]
-          .filter((el) => el.children.length && el.children.length < 12
-            && /\b\d{1,2}\s*[.\-]\s*\d{1,2}\b|\bR\d{1,2}\b/.test((el.textContent || '').slice(0, 60)))
-          .slice(0, 3)
-          .map((el) => clip(el, 900)),
+        activeTab: txt(active) || null,
+        roleRowCount: roleRows.length,
+        trCount: document.querySelectorAll('tr').length,
+        // Row markup drives both pick-history scraping and badge placement.
+        rows: roleRows.slice(1, 4).map((r) => clip(r, 1100)),
+        // Column-by-column text of one row, which identifies the view far
+        // more reliably than guessing from class names: the player list
+        // reads "14 / CeeDee Lamb / DAL WR / ...", pick history reads
+        // something like "1.04 / Team 3 / Justin Jefferson".
+        cells: roleRows.slice(1, 4).map((r) =>
+          [...r.querySelectorAll('.public_fixedDataTableCell_cellContent, [role="gridcell"]')]
+            .map(txt).filter(Boolean).slice(0, 8)),
       };
       try { chrome.storage.local.set({ espnDomSample: sample }); } catch (_) {}
     } catch (_) { /* diagnostics must never break the page */ }
