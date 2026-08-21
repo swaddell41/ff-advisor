@@ -154,7 +154,7 @@
     h += '</table>';
 
     // Top-3 score breakdown
-    h += `<div style="${gray};margin-bottom:2px">score = (points over replacement + value vanishing by your next pick + 3% tiebreak) × need:</div>`;
+    h += `<div style="${gray};margin-bottom:2px">ranked by the starting lineup each choice FINISHES with (him + best completion of your open slots at your future picks); score = (points over replacement + vanishing + 3% tiebreak) × need:</div>`;
     a.top.forEach((t, i) => {
       const star = i === 0 ? '<span style="color:#facc15">★</span> ' : `${i + 1}. `;
       const parts = [];
@@ -167,7 +167,9 @@
         if (t.drop > 0) parts.push(`+${kfmt(t.drop)} vanishing`);
       }
       h += `<div>${star}<b>${t.name}</b> ${t.pos}${t.posRank || ''} — ` +
-        `${parts.join(' ')} × ${t.mult.toFixed(2)} need = <b>${Math.round(t.score)}</b></div>`;
+        `${parts.join(' ')} × ${t.mult.toFixed(2)} need = <b>${Math.round(t.score)}</b>` +
+        (t.plan == null ? '' : ` · finishes starters at <b>${kfmt(t.plan)}</b>`) +
+        `</div>`;
     });
 
     // Rules in effect
@@ -1399,8 +1401,91 @@
     // Fallback: if no eligible starter-fillers remain on the board (e.g. an
     // open TE slot with every ranked TE drafted), show the gated pool
     // rather than a blank strip.
+    // ── Roster-completion plan ────────────────────────────────────────
+    // The greedy score is one-pick myopic: deferring a position is cheap
+    // on every individual turn and expensive in aggregate, because drop
+    // only measures value vanishing by the NEXT pick. Offline replay vs
+    // the prod board (strategy-test.js) showed exactly that failure: in a
+    // 2RB/3WR/1FLEX lineup the greedy line opened WR-TE-WR-WR-WR and
+    // finished ~700 starter-value behind an RB-early line.
+    //
+    // So the leaders are re-ranked by what the STARTING LINEUP finishes
+    // as: take the candidate, then fill my remaining starter slots at my
+    // actual future picks (snake math) from a need-aware room projection,
+    // and score the finished starters. Bench phase keeps the plain score —
+    // there is no lineup left to complete.
+    if (!benchPhase && C && state.mySlot && la && cands.length > 1) {
+      const myPicks = [];
+      const horizon = (L.rounds || 15) * L.teams;
+      for (let pn = state.currentPick + 1; pn <= horizon && myPicks.length < 8; pn++) {
+        if (pickSlot(pn) === state.mySlot) myPicks.push(pn);
+      }
+      const planValue = (cand) => {
+        // Project the room NEED-AWARE, not by value order. TEs and QBs sit
+        // low in a value-ordered pool, so value-order removal believes they
+        // survive many rounds — while a room where someone still needs a TE
+        // takes him. First plan draft made exactly that error: it deferred
+        // TE past a round where the (need-aware) room drained the tier, and
+        // finished ~900 starter-value worse. Same room model as
+        // simulateRoom, walked pick-by-pick to my horizon.
+        const counts = Object.assign({}, C);
+        counts[cand.p.position] = (counts[cand.p.position] || 0) + 1;
+        const taken = new Set([String(cand.p.player_id)]);
+        const roomC = {};
+        for (const k in (state.slotCounts || {})) roomC[k] = Object.assign({}, state.slotCounts[k]);
+        let total = cand.p.value;
+        const last = myPicks[myPicks.length - 1];
+        for (let pn = state.currentPick + 1; pn <= last; pn++) {
+          const slot = pickSlot(pn);
+          if (slot === state.mySlot) {
+            const cnt = (x) => counts[x] || 0;
+            const ded = {
+              QB: (L.qb + L.sf) - cnt('QB'), RB: L.rb - cnt('RB'),
+              WR: L.wr - cnt('WR'), TE: L.te - cnt('TE'),
+            };
+            const fu = Math.max(0, cnt('RB') - L.rb) + Math.max(0, cnt('WR') - L.wr) +
+              Math.max(0, cnt('TE') - L.te);
+            const fo = Math.max(0, L.flex - fu);
+            if (fo <= 0 && !Object.values(ded).some((n) => n > 0)) break;
+            const teF = cnt('TE') >= L.te;
+            let choice = null;
+            for (const q of avail) {
+              if (taken.has(String(q.player_id))) continue;
+              const ok = (ded[q.position] || 0) > 0 ||
+                (fo > 0 && (q.position === 'RB' || q.position === 'WR' ||
+                            (q.position === 'TE' && !teF)));
+              if (ok) { choice = q; break; }
+            }
+            if (!choice) break;
+            taken.add(String(choice.player_id));
+            total += choice.value;
+            counts[choice.position] = (counts[choice.position] || 0) + 1;
+          } else {
+            const c = roomC[slot] = roomC[slot] || {};
+            let pick = null;
+            let fallback = null;
+            for (const q of avail) {
+              if (taken.has(String(q.player_id))) continue;
+              if (!fallback) fallback = q;
+              if (teamCanStart(c, q.position)) { pick = q; break; }
+            }
+            pick = pick || fallback;
+            if (pick) {
+              taken.add(String(pick.player_id));
+              c[pick.position] = (c[pick.position] || 0) + 1;
+            }
+          }
+        }
+        return total;
+      };
+      cands.sort((a, b) => b.score - a.score);
+      for (let i = 0; i < Math.min(8, cands.length); i++) cands[i].plan = planValue(cands[i]);
+    }
+
     const pool = cands.length ? cands : gated;
-    pool.sort((a, b) => b.score - a.score);
+    // Leaders rank by completed-lineup value when a plan exists; the greedy
+    // score orders everyone else and breaks ties.
+    pool.sort((a, b) => ((b.plan == null ? -1 : b.plan) - (a.plan == null ? -1 : a.plan)) || (b.score - a.score));
     const top = pool.slice(0, 3);
 
     // Audit trail: everything that went into this recommendation, rendered
@@ -1434,6 +1519,7 @@
         name: c.p.name, pos: c.p.position, posRank: c.p.pos_rank,
         value: c.p.value, vorp: c.vorp || 0, drop: c.drop || 0,
         mult: c.mult == null ? 1 : c.mult, score: c.score,
+        plan: c.plan == null ? null : Math.round(c.plan),
       })),
       usedGatedFallback: !cands.length && !!gated.length,
     };
