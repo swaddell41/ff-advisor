@@ -378,6 +378,18 @@
   //
   // Read-only, truncated, and throttled — it must never cost anything on
   // a page we do not own.
+  // Group rows by a coarse signature (cell count + the shape of the first
+  // cell) and return one example of each. Guarantees every table on the
+  // page is represented regardless of DOM order or how many rows it has.
+  function shapeSig(cells) {
+    const first = cells[0] || '';
+    const kind = /^\d+$/.test(first) ? 'int'
+      : /^\d{1,2}\.\d{1,2}$/.test(first) ? 'dotted'
+      : /^R\d/i.test(first) ? 'round'
+      : /^\d/.test(first) ? 'numish' : 'text';
+    return `${cells.length}:${kind}`;
+  }
+
   let lastDomSample = 0;
   function captureDomSample() {
     if (!isExt) return;
@@ -387,12 +399,28 @@
     try {
       const clip = (el, n) => (el && el.outerHTML ? el.outerHTML.slice(0, n) : null);
       const txt = (el) => (el && el.textContent ? el.textContent.trim().slice(0, 120) : '');
+      // ONLY cellContent: [role="gridcell"] is its parent, so matching both
+      // returned every value twice ("69","69","Luther Burden III...",...).
+      const cellsOf = (r) => [...r.querySelectorAll('.public_fixedDataTableCell_cellContent')]
+        .map(txt).filter(Boolean).slice(0, 8);
 
       // ESPN's main tables are FixedDataTable: divs with role=row /
       // role=gridcell, NOT <tr>. The only <tr> on the page belong to the
       // sidebar (pick queue, roster), which is why an earlier sample of
       // <tr> captured nothing useful.
       const roleRows = [...document.querySelectorAll('[role="row"]')];
+      const sampleShapes = (rows) => {
+        const seen = new Map();
+        for (const r of rows) {
+          const c = cellsOf(r);
+          if (!c.length) continue;
+          const sig = shapeSig(c);
+          if (seen.has(sig)) { seen.get(sig).count += 1; continue; }
+          seen.set(sig, { sig, count: 1, cells: c, html: clip(r, 700) });
+          if (seen.size >= 8) break;
+        }
+        return [...seen.values()];
+      };
       const active = document.querySelector('[role="tab"][aria-selected="true"]');
 
       const sample = {
@@ -400,17 +428,56 @@
         activeTab: txt(active) || null,
         roleRowCount: roleRows.length,
         trCount: document.querySelectorAll('tr').length,
-        // Row markup drives both pick-history scraping and badge placement.
-        rows: roleRows.slice(1, 4).map((r) => clip(r, 1100)),
-        // Column-by-column text of one row, which identifies the view far
-        // more reliably than guessing from class names: the player list
-        // reads "14 / CeeDee Lamb / DAL WR / ...", pick history reads
-        // something like "1.04 / Team 3 / Justin Jefferson".
-        cells: roleRows.slice(1, 4).map((r) =>
-          [...r.querySelectorAll('.public_fixedDataTableCell_cellContent, [role="gridcell"]')]
-            .map(txt).filter(Boolean).slice(0, 8)),
+        // One row of each distinct SHAPE, not the first N. Every tab's
+        // table is in the DOM at once and the player list comes first, so
+        // slicing the top rows only ever sampled that one — the pick
+        // history sat further down, unsampled, even with its tab active.
+        shapes: sampleShapes(roleRows),
       };
       try { chrome.storage.local.set({ espnDomSample: sample }); } catch (_) {}
+
+      // Pick history is only in the DOM while its tab is open, and that is
+      // a moment we cannot schedule. So recognise it whenever it appears
+      // and keep it STICKY — the user opens the tab once, whenever suits
+      // them, and the sample survives going back to the player list.
+      //
+      // Recognised on the FIRST cell alone being a pick label ("1.04",
+      // "R1"). Matching anywhere in the row would misfire on ordinary
+      // decimal stats — an earlier heuristic matched a 77.2 projection.
+      // "77.2" fits any loose round.pick pattern (77 and 2 are both 1-2
+      // digits) and is a points projection, not a pick — the same false
+      // positive that spoiled the previous heuristic. Bound it NUMERICALLY
+      // instead: no draft has a round 77.
+      const isPickLabel = (t) => {
+        const dot = /^(\d{1,2})\.(\d{1,2})$/.exec(t);
+        if (dot) {
+          const rd = Number(dot[1]); const pk = Number(dot[2]);
+          return rd >= 1 && rd <= 30 && pk >= 1 && pk <= 32;
+        }
+        const rp = /^R(\d{1,2})(?:\s*P(\d{1,2}))?$/i.exec(t);
+        return !!rp && Number(rp[1]) >= 1 && Number(rp[1]) <= 30;
+      };
+      const histRows = roleRows.filter((r) => {
+        const c = cellsOf(r);
+        return c.length >= 2 && isPickLabel(c[0]);
+      });
+      if (histRows.length >= 2) {
+        chrome.storage.local.get(['espnHistorySample'], (v) => {
+          const prev = v && v.espnHistorySample;
+          // Keep the richest capture seen, so a half-rendered virtualised
+          // list cannot overwrite a good one.
+          if (prev && (prev.rowCount || 0) > histRows.length) return;
+          try {
+            chrome.storage.local.set({ espnHistorySample: {
+              at: now,
+              activeTab: txt(active) || null,
+              rowCount: histRows.length,
+              rows: histRows.slice(0, 3).map((r) => clip(r, 1100)),
+              cells: histRows.slice(0, 12).map((r) => cellsOf(r)),
+            } });
+          } catch (_) {}
+        });
+      }
     } catch (_) { /* diagnostics must never break the page */ }
   }
 

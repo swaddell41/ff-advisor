@@ -109,7 +109,7 @@ async function boot() {
   $('copy-debug').addEventListener('click', () => {
     if (!isExt) return;
     const KEYS = ['espnDraft', 'espnBackfillInfo', 'espnCmdWords',
-                  'espnPickFrames', 'espnDebugFrames', 'espnDomSample'];
+                  'espnPickFrames', 'espnDebugFrames', 'espnDomSample', 'espnHistorySample'];
     chrome.storage.local.get(KEYS, (v) => {
       const frames = v.espnPickFrames || [];
       const out = {
@@ -118,6 +118,7 @@ async function boot() {
         espnBackfillInfo: v.espnBackfillInfo || null,
         espnCmdWords: v.espnCmdWords || null,
         espnDomSample: v.espnDomSample || null,
+        espnHistorySample: v.espnHistorySample || null,
         // Separated out: these answer a mid-draft join, and pick traffic
         // buries them fast.
         stateFrames: frames.filter((f) => /^(STATE|INIT)/i.test(f)),
