@@ -119,6 +119,8 @@
     byEspn: new Map(),   // espn_id -> player
     badges: new Map(),   // player_id -> Set<badge el>
     pickedIds: new Set(),// sleeper ids already drafted
+    myCounts: null,      // {QB: n, RB: n, ...} — my roster so far (null = unknown)
+    myUserId: null,      // sleeper user id (from stored username)
     currentPick: 1,
     format: 'sf_ppr',
     mode: 'redraft',
@@ -148,6 +150,19 @@
     }
   }
 
+  async function resolveMyUserId() {
+    if (!isExt) return;
+    try {
+      chrome.storage.local.get(['username'], async (v) => {
+        if (!v.username) return;
+        try {
+          const u = await xfetch(`${SLEEPER}/v1/user/${encodeURIComponent(v.username)}`);
+          if (u && u.user_id) state.myUserId = String(u.user_id);
+        } catch (_) {}
+      });
+    } catch (_) {}
+  }
+
   // ── Draft context (format/mode + current pick for steal deltas) ──────
   async function detectSleeperDraft() {
     const m = location.pathname.match(/\/draft\/\w+\/(\d+)/);
@@ -163,6 +178,15 @@
         try {
           const picks = await xfetch(`${SLEEPER}/v1/draft/${m[1]}/picks`);
           state.pickedIds = new Set((picks || []).map((p) => String(p.player_id)));
+          if (state.myUserId) {
+            const counts = {};
+            for (const p of picks || []) {
+              if (String(p.picked_by) !== state.myUserId) continue;
+              const pos = (p.metadata && p.metadata.position) || '?';
+              counts[pos] = (counts[pos] || 0) + 1;
+            }
+            state.myCounts = counts;
+          }
           setCurrentPick((picks || []).length + 1);
           recommend();
         } catch (_) {}
@@ -179,6 +203,15 @@
         d.picks.map((p) => state.byEspn.get(String(p.espn_id)))
           .filter(Boolean).map((p) => String(p.player_id))
       );
+      if (d.myTeamId) {
+        const counts = {};
+        for (const p of d.picks) {
+          if (p.team_id !== String(d.myTeamId)) continue;
+          const bp = state.byEspn.get(String(p.espn_id));
+          if (bp && bp.position) counts[bp.position] = (counts[bp.position] || 0) + 1;
+        }
+        state.myCounts = counts;
+      }
       setCurrentPick(d.picks.length + 1);
       recommend();
     };
@@ -356,8 +389,29 @@
     recommend();
   }
 
+  // How much you still want another player at this position, given what
+  // you've drafted. 1.0 = full appetite; filled positions decay hard so a
+  // third QB never outstars a needed RB.
+  function needMult(pos) {
+    if (!state.myCounts) return 1.0;
+    const n = state.myCounts[pos] || 0;
+    const sf = state.format.startsWith('sf');
+    if (pos === 'QB') {
+      const table = sf ? [1.1, 1.0, 0.5, 0.15] : [1.0, 0.3, 0.1];
+      return table[Math.min(n, table.length - 1)];
+    }
+    if (pos === 'TE') {
+      const table = [1.0, 0.4, 0.15];
+      return table[Math.min(n, table.length - 1)];
+    }
+    // RB / WR: gentle decay — depth still matters
+    const table = [1.0, 1.0, 1.0, 0.95, 0.85, 0.7, 0.5];
+    return table[Math.min(n, table.length - 1)];
+  }
+
   // Mark the strongest available players so the next pick is obvious:
-  // gold star = best on the board right now, green ring = next two.
+  // gold star = best for YOUR roster right now, green ring = next two.
+  // Score = board value × positional need from your actual picks.
   function recommend() {
     document.querySelectorAll('.ffa-badge.ffa-best, .ffa-badge.ffa-good')
       .forEach((el) => el.classList.remove('ffa-best', 'ffa-good'));
@@ -366,9 +420,10 @@
       const live = [...els].filter((e) => e.isConnected);
       if (!live.length) { state.badges.delete(pid); continue; }
       if (state.pickedIds.has(String(pid))) continue;
-      cands.push({ p: live[0].__ffaPlayer, els: live });
+      const p = live[0].__ffaPlayer;
+      cands.push({ p, els: live, score: p.value * needMult(p.position) });
     }
-    cands.sort((a, b) => b.p.value - a.p.value);
+    cands.sort((a, b) => b.score - a.score);
     if (cands[0]) cands[0].els.forEach((e) => e.classList.add('ffa-best'));
     cands.slice(1, 3).forEach((c) => c.els.forEach((e) => e.classList.add('ffa-good')));
   }
@@ -385,6 +440,7 @@
 
   // ── Boot ──────────────────────────────────────────────────────────────
   (async function boot() {
+    resolveMyUserId();
     try {
       if (isSleeper) await detectSleeperDraft();
       else watchEspnPicks();
