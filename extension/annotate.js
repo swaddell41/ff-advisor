@@ -167,7 +167,9 @@
   function updateBadge(el) {
     const p = el.__ffaPlayer;
     if (!p) return;
-    el.textContent = badgeText(p);
+    el.textContent = el.dataset.compact
+      ? `${(p.value / 1000).toFixed(1)}k`
+      : badgeText(p);
     const delta = state.currentPick - p.overall_rank;
     el.classList.toggle('ffa-steal', state.currentPick > 1 && delta >= 6);
     el.classList.toggle('ffa-t1', p.tier === 1 && !(state.currentPick > 1 && delta >= 6));
@@ -187,12 +189,33 @@
     const parent = textNode.parentNode;
     parent.insertBefore(b, textNode.nextSibling);
 
-    // If an ellipsizing ancestor is (now) truncating, take the badge out of
-    // the text flow entirely and park it in the gutter JUST PAST that
-    // cell's right edge — over the column boundary, not over the name.
-    // The badge must be hosted on a non-clipping ancestor (the row),
-    // because anything positioned beyond the cell edge inside the cell
-    // would be clipped by its overflow:hidden.
+    // Preferred placement: the short SECOND line of the cell (position/team
+    // metadata, e.g. "WR · DEN") — it has free space to its right and never
+    // collides with the name or the site's row buttons. Detected as a
+    // sibling element rendered below the name's line.
+    const parentEl = textNode.parentElement;
+    if (parentEl) {
+      const nameRect = b.getBoundingClientRect();
+      for (const el of parentEl.children) {
+        if (el === b || (el.classList && el.classList.contains('ffa-badge'))) continue;
+        const er = el.getBoundingClientRect();
+        if (er.width > 0 && er.top >= nameRect.bottom - 2) {
+          b.style.marginLeft = '6px';
+          el.appendChild(b);
+          const er2 = el.getBoundingClientRect();
+          if (b.getBoundingClientRect().right > er2.right + 1) {
+            b.dataset.compact = '1';   // crowded line → value only
+            updateBadge(b);
+          }
+          if (!state.badges.has(p.player_id)) state.badges.set(p.player_id, new Set());
+          state.badges.get(p.player_id).add(b);
+          return;
+        }
+      }
+    }
+
+    // Fallback: if an ellipsizing ancestor is truncating, take the badge out
+    // of the text flow and park it just past that cell's right edge.
     let anc = textNode.parentElement;
     for (let i = 0; i < 3 && anc; i += 1, anc = anc.parentElement) {
       const cs = getComputedStyle(anc);
