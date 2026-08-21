@@ -563,9 +563,12 @@
         Math.max(0, cnt('RB') - L.rb) + Math.max(0, cnt('WR') - L.wr) + Math.max(0, cnt('TE') - L.te);
       const flexOpen = Math.max(0, L.flex - flexUsed);
       startersOpen = flexOpen > 0 || Object.values(dedicatedOpen).some((n) => n > 0);
+      // TE2s don't count as flex-fillers: elite-TE market value is
+      // scarcity premium for the TE SLOT, not weekly points — a second TE
+      // produces roughly flex-line numbers while costing a premium pick.
       canStart = (pos) =>
         (dedicatedOpen[pos] || 0) > 0 ||
-        (flexOpen > 0 && (pos === 'RB' || pos === 'WR' || pos === 'TE'));
+        (flexOpen > 0 && (pos === 'RB' || pos === 'WR' || (pos === 'TE' && !teFilled)));
     }
 
     const cands = [];
