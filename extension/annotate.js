@@ -353,6 +353,19 @@
     } catch (_) {}
   }
 
+  // ESPN's own pick counter, read from the draft room header ("ON THE
+  // CLOCK: PICK 15"). A cross-check on how many picks we believe have
+  // happened — never a data source. Requires the "ON THE CLOCK" prefix so
+  // our own strip ("* PICK: ...") cannot match itself.
+  function espnPickFromDom() {
+    try {
+      const t = ((document.body && document.body.textContent) || '').slice(0, 20000);
+      const m = t.match(/ON THE CLOCK\D{0,24}?(\d{1,3})/i);
+      const n = m ? Number(m[1]) : 0;
+      return n > 0 && n < 1000 ? n : null;
+    } catch (_) { return null; }
+  }
+
   // ── League size, observed ─────────────────────────────────────────────
   // The draft that is actually running is the authority on how many teams
   // are in it — not a settings field, which can be stale, absent (ESPN
@@ -536,10 +549,20 @@
     // change, and carries REAL overall pick numbers rather than the arrival
     // order we have to infer from frames. Fetched once at startup; the live
     // feed takes over from there.
+    // Backfill for picks we never saw. The tap only observes picks made
+    // while it is connected, so anything that happens during an outage —
+    // socket drop, hung page, extension reload — is invisible to it. And a
+    // refresh is usually PROVOKED by such an outage, so the missing window
+    // is exactly the one that matters.
+    //
+    // Re-polled rather than fetched once, so a real league self-heals any
+    // gap within one interval. Returns nothing for a practice draft (which
+    // never writes to draftDetail), which is what pick persistence and the
+    // gap detector below are for.
     state.espnBackfill = [];
     let backfillInfo = { tried: false };
-    if (leagueId && leagueId !== '0') {
-      backfillInfo = { tried: true };
+    const fetchBackfill = async () => {
+      if (!leagueId || leagueId === '0') return;
       try {
         const j = await xfetch(
           `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${season}/segments/0/leagues/${leagueId}?view=mDraftDetail`,
@@ -549,13 +572,8 @@
         const raw = (dd && dd.picks) || [];
         // draftDetail is PRE-ALLOCATED for the entire draft: an 8-team,
         // 17-round league returns all 136 entries from the moment it is
-        // created, with unmade picks carrying a sentinel playerId.
-        //
-        // The previous filter tested the STRINGIFIED id against '0', which
-        // lets a negative sentinel like "-1" straight through — so every
-        // unmade pick was treated as real, injecting 136 phantoms. They
-        // matched nothing on the board, pickedIds stayed empty, and a
-        // mid-draft refresh still cleared the pool. Test the NUMERIC value.
+        // created, unmade picks carrying playerId -1. Test the NUMERIC
+        // value — a string compare against '0' lets "-1" through.
         const made = raw.filter(
           (q) => Number(q.playerId) > 0 && Number(q.overallPickNumber) > 0
         );
@@ -566,30 +584,27 @@
             pick_no: Number(q.overallPickNumber),
           }))
           .sort((a, b) => a.pick_no - b.pick_no);
-        // Distinguish the failure modes that look identical from outside:
-        // no draftDetail at all, a draft that has not started, and a real
-        // response we failed to map.
         backfillInfo = {
           tried: true,
-          keys: j ? Object.keys(j).slice(0, 12) : null,
           hasDraftDetail: !!dd,
           drafted: dd ? dd.drafted : null,
-          inProgress: dd ? dd.inProgress : null,
           rawPicks: raw.length,
           usable: state.espnBackfill.length,
-          // The sentinel itself, so it is confirmed rather than assumed.
           unmadeIds: [...new Set(
             raw.filter((q) => !(Number(q.playerId) > 0)).map((q) => q.playerId)
           )].slice(0, 5),
-          sample: raw[0] ? Object.keys(raw[0]) : null,
         };
       } catch (e) {
-        backfillInfo = { tried: true, error: String(e && e.message || e) };
+        backfillInfo = { tried: true, error: String((e && e.message) || e) };
       }
-    }
-    if (isExt) {
-      try { chrome.storage.local.set({ espnBackfillInfo: backfillInfo }); } catch (_) {}
-    }
+      if (isExt) {
+        try { chrome.storage.local.set({ espnBackfillInfo: backfillInfo }); } catch (_) {}
+      }
+    };
+    await fetchBackfill();
+    // Cheap (one request), and the only thing that can recover picks lost
+    // to an outage in a real league.
+    setInterval(() => { fetchBackfill().then(() => pickPollTrigger && pickPollTrigger()); }, 20000);
 
     // Mock-lobby fallback. Without it the lineup keeps the Sleeper-flavoured
     // defaults (15 rounds, no K/DST), so replacement levels and every snake
@@ -675,10 +690,23 @@
       // the round-1 slice cannot come out exactly right, the guard fails,
       // and we fall back to the value-order model rather than seating every
       // team wrongly and skewing every lookahead number in the draft.
+      // Truth-check against ESPN's own counter. If the room says pick 40
+      // and we know of 36, four picks happened while we were not listening
+      // — during an outage, or before we ever connected. A refresh is
+      // usually PROVOKED by such an outage, so this is the common case
+      // rather than an edge one.
+      //
+      // We cannot recover them from here, but we must not pretend the
+      // board is complete. The run model reads every team's roster, so a
+      // hole makes it confidently wrong rather than merely incomplete —
+      // worse than no run model at all. Degrade instead, and say so.
+      const domPick = espnPickFromDom();
+      state.espnGap = domPick ? Math.max(0, (domPick - 1) - order.length) : 0;
+
       const r1 = order.filter((e) => Number(e.p.pick_no) <= teams && e.p.team_id != null)
         .map((e) => String(e.p.team_id));
       const r1uniq = [...new Set(r1)];
-      const seated = r1.length === teams && r1uniq.length === teams;
+      const seated = r1.length === teams && r1uniq.length === teams && !state.espnGap;
 
       if (seated) {
         const slotOf = new Map(r1uniq.map((t, i) => [t, i + 1]));
@@ -955,7 +983,10 @@
     }
     pruneBadges();
     setPill(`${state.byName.size} players on board · ${state.badges.size} matched on page` +
-      (state.badges.size === 0 ? ' — no names matched yet (scrolling the player list helps)' : ''));
+      (state.badges.size === 0 ? ' — no names matched yet (scrolling the player list helps)' : '') +
+      (state.espnGap
+        ? ` · ⚠ ${state.espnGap} pick${state.espnGap === 1 ? '' : 's'} missed — run model off`
+        : ''));
     recommend();
   }
 
