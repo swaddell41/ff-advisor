@@ -143,7 +143,7 @@
     badges: new Map(),   // player_id -> Set<badge el>
     pickedIds: new Set(),// sleeper ids already drafted
     allPlayers: [],      // full board, for global recommendations
-    lineup: { teams: 10, qb: 1, rb: 2, wr: 2, te: 1, flex: 1, sf: 0 },
+    lineup: { teams: 10, qb: 1, rb: 2, wr: 2, te: 1, flex: 1, sf: 0, k: 0, dst: 0, rounds: 15 },
     repl: null,          // replacement-level value per position (VORP baseline)
     myCounts: null,      // {QB: n, RB: n, ...} — my roster so far (null = unknown)
     myUserId: null,      // sleeper user id (from stored username)
@@ -246,6 +246,9 @@
         te: s.slots_te ?? 1,
         flex: (s.slots_flex ?? 1) + (s.slots_wr_rb ?? 0) + (s.slots_wr_rb_te ?? 0),
         sf: s.slots_super_flex ?? 0,
+        k: s.slots_k ?? 0,
+        dst: s.slots_def ?? 0,
+        rounds: s.rounds ?? 15,
       };
       computeReplacement();
       // Pick polling: a steady timer PLUS immediate refreshes when the page
@@ -301,6 +304,9 @@
             te: slots['6'] || 1,
             flex: slots['23'] || 1,
             sf: slots['7'] || 0,
+            k: slots['17'] || 0,
+            dst: slots['16'] || 0,
+            rounds: 16,
           };
           computeReplacement();
         }
@@ -598,10 +604,25 @@
 
     if (top.length && state.currentPick > 1) {
       const fmt = (c) => `${c.p.name} ${(c.p.value / 1000).toFixed(1)}k ${c.p.position}`;
-      const roster = state.myCounts
-        ? ' · <span style="color:#8b93a5">roster ' +
-          ['QB', 'RB', 'WR', 'TE'].map((x) => (state.myCounts[x] || 0) + x).join(' ') + '</span>'
-        : ' · <span style="color:#f87171">roster unknown — click to set username</span>';
+      let roster;
+      if (state.myCounts) {
+        const cnt = (x) => state.myCounts[x] || 0;
+        const totalMine = Object.values(state.myCounts).reduce((a, b) => a + b, 0);
+        const remaining = Math.max(0, (state.lineup.rounds || 15) - totalMine);
+        const reserve = Math.max(0, (state.lineup.k || 0) - cnt('K')) +
+                        Math.max(0, (state.lineup.dst || 0) - (cnt('DEF') + cnt('DST')));
+        let phase = startersOpen ? 'filling starters' : 'bench phase';
+        if (!startersOpen && reserve > 0 && remaining <= reserve) {
+          phase = '<span style="color:#facc15">time for K/DST (not on our board)</span>';
+        } else if (reserve > 0) {
+          phase += `, save ${reserve} for K/DST`;
+        }
+        roster = ' · <span style="color:#8b93a5">' +
+          ['QB', 'RB', 'WR', 'TE'].map((x) => cnt(x) + x).join(' ') +
+          ` · ${remaining} picks left · ${phase}</span>`;
+      } else {
+        roster = ' · <span style="color:#f87171">roster unknown — click to set username</span>';
+      }
       reco.innerHTML =
         '<span style="color:#facc15">★ PICK: ' + fmt(top[0]) + '</span>' +
         (top[1] ? '<span style="color:#8b93a5"> · then ' + top.slice(1).map(fmt).join(' · ') + '</span>' : '') +
