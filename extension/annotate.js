@@ -542,6 +542,32 @@
     // elite faller can still clear the bar. Same logic guards QB via the
     // need multiplier (QBs have no flex path at all).
     const teFilled = state.myCounts && ((state.myCounts.TE || 0) >= state.lineup.te);
+
+    // Starters-first gate: while ANY starting slot (dedicated or flex) is
+    // open, players who cannot fill one — e.g. a backup QB in a 1QB league —
+    // are hard-deprioritized. Once your lineup is full, the gate lifts and
+    // bench value (QB insurance, RB depth) competes on normal VORP terms.
+    const L = state.lineup;
+    const C = state.myCounts;
+    let startersOpen = false;
+    let canStart = () => true;
+    if (C && L) {
+      const cnt = (x) => C[x] || 0;
+      const dedicatedOpen = {
+        QB: Math.max(0, (L.qb + L.sf) - cnt('QB')),
+        RB: Math.max(0, L.rb - cnt('RB')),
+        WR: Math.max(0, L.wr - cnt('WR')),
+        TE: Math.max(0, L.te - cnt('TE')),
+      };
+      const flexUsed =
+        Math.max(0, cnt('RB') - L.rb) + Math.max(0, cnt('WR') - L.wr) + Math.max(0, cnt('TE') - L.te);
+      const flexOpen = Math.max(0, L.flex - flexUsed);
+      startersOpen = flexOpen > 0 || Object.values(dedicatedOpen).some((n) => n > 0);
+      canStart = (pos) =>
+        (dedicatedOpen[pos] || 0) > 0 ||
+        (flexOpen > 0 && (pos === 'RB' || pos === 'WR' || pos === 'TE'));
+    }
+
     const cands = [];
     for (const p of state.allPlayers) {
       if (state.pickedIds.has(String(p.player_id))) continue;
@@ -551,7 +577,9 @@
       }
       // VORP core + a whisper of raw value as tiebreak, need-weighted.
       const vorp = Math.max(0, p.value - repl);
-      cands.push({ p, score: (vorp + p.value * 0.03) * needMult(p.position) });
+      let score = (vorp + p.value * 0.03) * needMult(p.position);
+      if (startersOpen && !canStart(p.position)) score *= 0.15;
+      cands.push({ p, score });
     }
     cands.sort((a, b) => b.score - a.score);
     const top = cands.slice(0, 3);
