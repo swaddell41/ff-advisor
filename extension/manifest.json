@@ -9,12 +9,22 @@
     "https://ff-advisor-sam-waddells-projects.vercel.app/*"
   ],
   "side_panel": { "default_path": "panel.html" },
-  "action": { "default_title": "Open draft assistant" },
+  "action": { "default_title": "Show draft assistant" },
   "background": { "service_worker": "background.js" },
+  "web_accessible_resources": [
+    {
+      "resources": ["panel.html", "panel.js", "panel.css"],
+      "matches": ["https://sleeper.com/*", "https://fantasy.espn.com/*", "https://*.espn.com/*"]
+    }
+  ],
   "content_scripts": [
     {
       "matches": ["https://sleeper.com/draft/*"],
-      "js": ["content.js"]
+      "js": ["content.js", "overlay.js"]
+    },
+    {
+      "matches": ["https://fantasy.espn.com/*draft*", "https://*.espn.com/*draft*"],
+      "js": ["overlay.js"]
     },
     {
       "matches": ["https://fantasy.espn.com/*draft*", "https://*.espn.com/*draft*"],

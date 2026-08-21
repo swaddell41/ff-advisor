@@ -12,9 +12,12 @@ roster-need hints, injury flags, and falling-value alerts.
 
 ## Use
 
-- Open any Sleeper draft room (`sleeper.com/draft/nfl/...`) and click the
-  toolbar icon — the side panel connects to that draft automatically.
-- Or paste a draft URL/ID into the panel manually.
+- Open any Sleeper or ESPN draft room — the assistant appears as a
+  **floating card on the page itself** (drag it by the header, collapse
+  with —, hide with ✕; the toolbar icon brings it back). Position and
+  collapsed state are remembered.
+- The Chrome side panel is still available from the toolbar icon on
+  non-draft pages, and the panel can connect manually by pasted draft URL/ID.
 - Enter your Sleeper username once to get "your picks" tracking and
   positional-need hints.
 - Mode auto-detects (redraft values for seasonal drafts, dynasty values for
