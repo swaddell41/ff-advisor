@@ -1079,15 +1079,26 @@
       // to the WeakSet, so ask what the row actually holds right now.
       const row = rowOf(t);
       if (row) {
+        // Careful with OTHER players' badges here. On ESPN a row holds one
+        // player, but on Sleeper rowOf() can resolve to a container naming
+        // several — and dropping everything that isn't THIS player nuked
+        // teammates' badges one scan at a time until none were left (their
+        // text nodes were already memoized, so they never came back).
+        // A different player's badge is stale ONLY if that player is no
+        // longer named in the row — which is what a recycled row looks
+        // like, and never true in a multi-player container.
         let reused = false;
+        const rowText = row.textContent || '';
         for (const b of row.querySelectorAll('.ffa-badge')) {
           const bp = b.__ffaPlayer;
-          if (!reused && bp && String(bp.player_id) === String(p.player_id)) {
-            updateBadge(b);   // right player, still attached — just refresh
+          if (!bp) { dropBadge(b); continue; }
+          if (String(bp.player_id) === String(p.player_id)) {
+            if (reused) { dropBadge(b); continue; }  // true duplicate
+            updateBadge(b);   // right player, still attached — refresh
             reused = true;
-          } else {
-            dropBadge(b);     // duplicate, or left over from a recycled row
+            continue;
           }
+          if (!rowText.includes(bp.name)) dropBadge(b);
         }
         if (reused) { processed.add(t); continue; }
       }
