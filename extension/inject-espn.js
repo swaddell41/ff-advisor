@@ -22,7 +22,17 @@
     // crosses the isolated-world boundary reliably.
     const relay = (url, data) => {
       try {
-        if (typeof data !== 'string' || data.length > 4000) return;
+        if (typeof data !== 'string') return;
+        // 4000 was too tight: a full draft-state sync (every pick so far)
+        // is exactly the frame we most want and exactly the one that
+        // exceeded it, so it was dropped silently. Report what we still
+        // drop rather than discarding it without trace.
+        if (data.length > 32000) {
+          document.dispatchEvent(new CustomEvent('ffa-espn-frame', {
+            detail: JSON.stringify({ url: String(url || ''), oversize: data.length }),
+          }));
+          return;
+        }
         document.dispatchEvent(new CustomEvent('ffa-espn-frame', {
           detail: JSON.stringify({ url: String(url || ''), data }),
         }));

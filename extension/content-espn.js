@@ -22,9 +22,24 @@
 
   const picks = [];               // [{espn_id, team_id, pick_no}]
   const seen = new Set();         // dedupe by espn_id
-  const debugFrames = [];         // ring buffer of raw frames
+  const debugFrames = [];         // ring buffer of raw frames (noise filtered)
+  const pickFrames = [];          // frames whose command word looks pick-ish
+  const cmdSeen = Object.create(null); // command word -> count
   let framesSeen = 0;             // total WS frames observed (diagnostic)
+  let oversize = 0;               // frames the relay dropped for being too big
   let publishTimer = null;
+
+  // Frames that must never reach the debug ring. ESPN sends CLOCK roughly
+  // every 5s plus PONG heartbeats, and multiplexes Disney Streaming edge
+  // events (delivery receipts) over the same socket. At 80 slots that
+  // traffic evicts a pick frame within about a minute, which is why the
+  // first live export came back with no SELECTED frames in it at all.
+  const NOISE_CMD = /^(CLOCK|PONG|PING|AUTOSUGGEST|TOKEN)$/;
+
+  // Deliberately broad: we do not yet know ESPN's real command word for a
+  // pick, so capture anything plausibly related into a ring that the noise
+  // filter can never flush.
+  const PICKISH = /SELECT|PICK|DRAFT|ROSTER|PLAYER/;
 
   function publish() {
     if (publishTimer) return;
@@ -38,9 +53,15 @@
           myTeamId,
           picks: picks.slice(),
           framesSeen,
+          oversize,
           updatedAt: Date.now(),
         },
         espnDebugFrames: debugFrames.slice(-80),
+        // Survives noise: whatever ESPN actually calls a pick lands here.
+        espnPickFrames: pickFrames.slice(-40),
+        // Census of every command word seen. Cheap protocol discovery — it
+        // names the pick command even if we never catch its payload.
+        espnCmdWords: Object.assign({}, cmdSeen),
       });
       } catch (_) { /* orphaned after extension reload */ }
     }, 250);
@@ -113,11 +134,29 @@
   document.addEventListener('ffa-espn-frame', (ev) => {
     let msg;
     try { msg = JSON.parse(ev.detail); } catch (_) { return; }
+    if (msg && msg.oversize) { oversize += 1; publish(); return; }
     if (!msg || typeof msg.data !== 'string') return;
     framesSeen += 1;
-    debugFrames.push(`in ${msg.data.slice(0, 300)}`);
-    if (debugFrames.length > 200) debugFrames.shift();
-    parseFrame(msg.data);
+
+    const text = msg.data;
+    const isJson = text[0] === '{' || text[0] === '[';
+    const cmd = isJson ? '<json>' : (text.trim().split(/\s+/)[0] || '').toUpperCase();
+    cmdSeen[cmd] = (cmdSeen[cmd] || 0) + 1;
+
+    // Disney edge events are JSON but never draft data.
+    const dss = isJson && text.indexOf('"urn:dss:') !== -1;
+    if (!isJson && PICKISH.test(cmd)) {
+      pickFrames.push(text.slice(0, 1000));
+      if (pickFrames.length > 80) pickFrames.shift();
+    }
+    if (!NOISE_CMD.test(cmd) && !dss) {
+      // 1000 not 300: the old cap truncated JSON frames mid-object, which
+      // hid whatever fields came after the first ~300 characters.
+      debugFrames.push(`in ${text.slice(0, 1000)}`);
+      if (debugFrames.length > 200) debugFrames.shift();
+    }
+
+    parseFrame(text);
     publish();
   });
 
