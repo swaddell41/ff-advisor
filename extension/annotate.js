@@ -535,10 +535,20 @@
     document.querySelectorAll('.ffa-badge.ffa-best, .ffa-badge.ffa-good')
       .forEach((el) => el.classList.remove('ffa-best', 'ffa-good'));
 
+    // Once your TE slot is filled, another TE can only see the field via
+    // FLEX — where he competes with RB/WRs, not other TEs. His baseline
+    // becomes the flex line (much higher than the near-free TE12 line),
+    // which is why mid-tier TE2s stop being recommended while a truly
+    // elite faller can still clear the bar. Same logic guards QB via the
+    // need multiplier (QBs have no flex path at all).
+    const teFilled = state.myCounts && ((state.myCounts.TE || 0) >= state.lineup.te);
     const cands = [];
     for (const p of state.allPlayers) {
       if (state.pickedIds.has(String(p.player_id))) continue;
-      const repl = (state.repl && state.repl[p.position]) || 0;
+      let repl = (state.repl && state.repl[p.position]) || 0;
+      if (p.position === 'TE' && teFilled && state.repl) {
+        repl = Math.max(repl, state.repl.RB || 0, state.repl.WR || 0);
+      }
       // VORP core + a whisper of raw value as tiebreak, need-weighted.
       const vorp = Math.max(0, p.value - repl);
       cands.push({ p, score: (vorp + p.value * 0.03) * needMult(p.position) });
