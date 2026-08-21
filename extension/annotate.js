@@ -57,6 +57,21 @@
   document.documentElement.appendChild(pill);
   function setPill(t) { pill.textContent = 'FFA: ' + t; }
 
+  // Always-visible recommendation strip — the board's best picks for your
+  // roster, regardless of where the list is scrolled. Click to jump to the
+  // top player's row when it's rendered.
+  const reco = document.createElement('div');
+  reco.style.cssText = 'position:fixed;bottom:34px;left:10px;z-index:2147483645;' +
+    'background:rgba(15,17,21,.95);color:#e6e8ee;border:1px solid rgba(250,204,21,.5);' +
+    'border-radius:6px;padding:4px 9px;font:11px Menlo,monospace;cursor:pointer;display:none';
+  reco.title = 'Best picks for your roster right now (click to jump to the top player if visible)';
+  document.documentElement.appendChild(reco);
+  reco.addEventListener('click', () => {
+    const els = reco.__topPid && state.badges.get(reco.__topPid);
+    const live = els && [...els].find((e) => e.isConnected);
+    if (live) live.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
+
   // ── Explainer sidebar (auto-opens on load; pill toggles it) ──────────
   const HELP_KEY = 'ffaHideHelp';
   let helpEl = null;
@@ -119,6 +134,7 @@
     byEspn: new Map(),   // espn_id -> player
     badges: new Map(),   // player_id -> Set<badge el>
     pickedIds: new Set(),// sleeper ids already drafted
+    allPlayers: [],      // full board, for global recommendations
     myCounts: null,      // {QB: n, RB: n, ...} — my roster so far (null = unknown)
     myUserId: null,      // sleeper user id (from stored username)
     currentPick: 1,
@@ -142,6 +158,7 @@
     const board = await xfetch(`${API_BASE}/api/draftboard?format=${state.format}&mode=${state.mode}`);
     state.byName.clear();
     state.byEspn.clear();
+    state.allPlayers = board.players;
     for (const p of board.players) {
       const k = norm(p.name);
       if (!state.byName.has(k)) state.byName.set(k, []);
@@ -437,23 +454,40 @@
     return table[Math.min(n, table.length - 1)];
   }
 
-  // Mark the strongest available players so the next pick is obvious:
-  // gold star = best for YOUR roster right now, green ring = next two.
-  // Score = board value × positional need from your actual picks.
+  // Global recommendation: scored over the ENTIRE board (not just rows the
+  // site happens to have rendered), shown in the fixed strip; badges get
+  // starred too whenever their rows are in the DOM.
   function recommend() {
     document.querySelectorAll('.ffa-badge.ffa-best, .ffa-badge.ffa-good')
       .forEach((el) => el.classList.remove('ffa-best', 'ffa-good'));
+
     const cands = [];
-    for (const [pid, els] of state.badges) {
-      const live = [...els].filter((e) => e.isConnected);
-      if (!live.length) { state.badges.delete(pid); continue; }
-      if (state.pickedIds.has(String(pid))) continue;
-      const p = live[0].__ffaPlayer;
-      cands.push({ p, els: live, score: p.value * needMult(p.position) });
+    for (const p of state.allPlayers) {
+      if (state.pickedIds.has(String(p.player_id))) continue;
+      cands.push({ p, score: p.value * needMult(p.position) });
     }
     cands.sort((a, b) => b.score - a.score);
-    if (cands[0]) cands[0].els.forEach((e) => e.classList.add('ffa-best'));
-    cands.slice(1, 3).forEach((c) => c.els.forEach((e) => e.classList.add('ffa-good')));
+    const top = cands.slice(0, 3);
+
+    top.forEach((c, i) => {
+      const els = state.badges.get(c.p.player_id);
+      if (!els) return;
+      for (const el of els) {
+        if (!el.isConnected) continue;
+        el.classList.add(i === 0 ? 'ffa-best' : 'ffa-good');
+      }
+    });
+
+    if (top.length && state.currentPick > 1) {
+      const fmt = (c) => `${c.p.name} ${(c.p.value / 1000).toFixed(1)}k ${c.p.position}`;
+      reco.innerHTML =
+        '<span style="color:#facc15">★ PICK: ' + fmt(top[0]) + '</span>' +
+        (top[1] ? '<span style="color:#8b93a5"> · then ' + top.slice(1).map(fmt).join(' · ') + '</span>' : '');
+      reco.__topPid = top[0].p.player_id;
+      reco.style.display = 'block';
+    } else {
+      reco.style.display = 'none';
+    }
   }
 
   let scanScheduled = false;
