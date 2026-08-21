@@ -97,6 +97,7 @@ async function boot() {
   });
   $('sf-toggle').addEventListener('change', async (e) => {
     state.format = e.target.checked ? 'sf_ppr' : '1qb_ppr';
+    if (isExt) { try { chrome.storage.local.set({ espnSF: e.target.checked }); } catch (_) {} }
     await loadBoard();
     refreshPickedIds();
     render();
@@ -221,7 +222,15 @@ async function connectEspn(espnDraft) {
   if (pollTimer) clearInterval(pollTimer);
   $('copy-debug').hidden = !isExt;
 
-  // Mocks and most ESPN leagues are 1QB redraft; toggles override.
+  // Restore the persisted SF preference before deciding the format.
+  if (isExt) {
+    try {
+      await new Promise((res) => chrome.storage.local.get(['espnSF'], (v) => {
+        if (v.espnSF !== undefined) $('sf-toggle').checked = !!v.espnSF;
+        res();
+      }));
+    } catch (_) {}
+  }
   state.format = $('sf-toggle').checked ? 'sf_ppr' : '1qb_ppr';
   state.mode = $('mode-toggle').checked ? 'dynasty' : 'redraft';
 

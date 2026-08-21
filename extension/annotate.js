@@ -194,9 +194,37 @@
     } catch (_) {}
   }
 
-  function watchEspnPicks() {
+  async function watchEspnPicks() {
     state.format = '1qb_ppr';
+
+    // Superflex detection for real ESPN leagues: their lineup settings are
+    // readable in-session (the page's own API, cookies included). Slot 7 is
+    // OP (QB-eligible superflex); QB slot count > 1 also means 2QB.
+    const leagueId = new URLSearchParams(location.search).get('leagueId');
+    if (leagueId && leagueId !== '0') {
+      try {
+        const year = new Date().getFullYear();
+        const r = await fetch(
+          `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${year}/segments/0/leagues/${leagueId}?view=mSettings`,
+          { credentials: 'include' }
+        );
+        if (r.ok) {
+          const j = await r.json();
+          const slots = (j.settings && j.settings.rosterSettings && j.settings.rosterSettings.lineupSlotCounts) || {};
+          if ((slots['7'] || 0) > 0 || (slots['0'] || 0) > 1) state.format = 'sf_ppr';
+        }
+      } catch (_) { /* mocks / blocked — fall through */ }
+    }
+
     if (!isExt) return;
+    // Panel's SF toggle (persisted) overrides when league detection had
+    // nothing to say (e.g. mock lobby drafts).
+    try {
+      await new Promise((res) => chrome.storage.local.get(['espnSF'], (v) => {
+        if (state.format === '1qb_ppr' && v.espnSF) state.format = 'sf_ppr';
+        res();
+      }));
+    } catch (_) {}
     try {
     const applyEspn = (d) => {
       state.pickedIds = new Set(
@@ -443,7 +471,7 @@
     resolveMyUserId();
     try {
       if (isSleeper) await detectSleeperDraft();
-      else watchEspnPicks();
+      else await watchEspnPicks();
       await loadBoard();
     } catch (e) {
       setPill('board fetch FAILED — ' + e.message);
