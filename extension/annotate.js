@@ -561,6 +561,38 @@
 
   const processed = new WeakSet();
 
+  // The row element a name lives in, or null if the site has no semantic
+  // row. ESPN renders the player table as real <tr>s; returning null
+  // elsewhere keeps Sleeper on its original, known-good code path rather
+  // than guessing at a row boundary with an ancestor walk.
+  function rowOf(node) {
+    const el = node.parentElement;
+    return el ? el.closest('tr,li,[role="row"]') : null;
+  }
+
+  // Detach a badge AND forget it. state.badges backs both the "matched on
+  // page" count and the ★ flash, so leaked nodes inflate the pill and make
+  // the flash target elements that are no longer on screen.
+  function dropBadge(b) {
+    const p = b.__ffaPlayer;
+    if (p) {
+      const set = state.badges.get(p.player_id);
+      if (set) {
+        set.delete(b);
+        if (!set.size) state.badges.delete(p.player_id);
+      }
+    }
+    b.remove();
+  }
+
+  // Virtualized rows get torn out wholesale and their badges go with them.
+  function pruneBadges() {
+    for (const [pid, set] of state.badges) {
+      for (const b of set) if (!b.isConnected) set.delete(b);
+      if (!set.size) state.badges.delete(pid);
+    }
+  }
+
   function annotateAfter(textNode, p) {
     const b = document.createElement('span');
     b.className = 'ffa-badge';
@@ -651,10 +683,37 @@
       n += 1;
       const matches = state.byName.get(norm(t.nodeValue.trim()));
       if (!matches || matches.length !== 1) continue; // ambiguous names skipped
+      const p = matches[0];
+
+      // Reconcile against the ROW, not a memo of the text node. ESPN's
+      // player table is React-virtualized and breaks text-node memoization
+      // two ways: (1) a re-render swaps in a fresh text node while keeping
+      // the sibling element our badge was appended to, so the WeakSet sees
+      // a "new" name and appends a SECOND badge beside the surviving one;
+      // (2) scrolling RECYCLES a whole row for a different player, carrying
+      // the previous occupant's badge with it (this is why one stale value
+      // appeared to repeat down a run of adjacent rows). Both are invisible
+      // to the WeakSet, so ask what the row actually holds right now.
+      const row = rowOf(t);
+      if (row) {
+        let reused = false;
+        for (const b of row.querySelectorAll('.ffa-badge')) {
+          const bp = b.__ffaPlayer;
+          if (!reused && bp && String(bp.player_id) === String(p.player_id)) {
+            updateBadge(b);   // right player, still attached — just refresh
+            reused = true;
+          } else {
+            dropBadge(b);     // duplicate, or left over from a recycled row
+          }
+        }
+        if (reused) { processed.add(t); continue; }
+      }
+
       if (processed.has(t)) continue;
       processed.add(t);
-      annotateAfter(t, matches[0]);
+      annotateAfter(t, p);
     }
+    pruneBadges();
     setPill(`${state.byName.size} players on board · ${state.badges.size} matched on page` +
       (state.badges.size === 0 ? ' — no names matched yet (scrolling the player list helps)' : ''));
     recommend();
