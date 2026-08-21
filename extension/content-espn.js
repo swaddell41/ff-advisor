@@ -39,7 +39,7 @@
   // Deliberately broad: we do not yet know ESPN's real command word for a
   // pick, so capture anything plausibly related into a ring that the noise
   // filter can never flush.
-  const PICKISH = /SELECT|PICK|DRAFT|ROSTER|PLAYER/;
+  const PICKISH = /SELECT|PICK|DRAFT|ROSTER|PLAYER|STATE|INIT/;
 
   function publish() {
     if (publishTimer) return;
@@ -67,29 +67,50 @@
     }, 250);
   }
 
-  function recordPick(espnId, teamId, pickNo) {
+  function recordPick(espnId, teamId) {
     const key = String(espnId);
     if (seen.has(key)) return;
     seen.add(key);
     picks.push({
       espn_id: key,
       team_id: teamId != null ? String(teamId) : null,
-      pick_no: pickNo != null ? Number(pickNo) : picks.length + 1,
+      // Overall pick number from ARRIVAL ORDER — the only trustworthy
+      // source. The frame's trailing token is not a pick number; see
+      // parseFrame. Caveat: picks that happened before we connected arrive
+      // via STATE, not SELECTED, so a mid-draft join undercounts until
+      // that frame is parsed too.
+      pick_no: picks.length + 1,
     });
     publish();
   }
 
   /**
-   * Defensive frame parsing.
+   * ESPN's draft protocol, captured live from a mock (league 1356040896):
    *
-   * Primary pattern: token frames like "SELECTED <teamId> <playerId> ..."
-   * Heuristics for token roles when order is uncertain:
-   *   - playerId: the numerically largest int (ESPN ids are 4-8 digits;
-   *     team ids are tiny; pick numbers are <= ~400)
-   *   - teamId:   smallest int <= 64
-   *   - pickNo:   an int between 1 and 600 that isn't the team id
-   * Also handles JSON frames containing playerId/teamId fields, just in
-   * case ESPN modernized the protocol.
+   *   SELECTED  <teamId> <playerId> <n> [memberId]   a pick
+   *   SELECTING <teamId> 30000                       team is on the clock
+   *   AUTOSUGGEST <playerId>                         what autopick would take
+   *   CLOCK 0 <msRemaining>                          pick timer
+   *   INIT / STATE / JOINED / TOKEN / AUTODRAFT / PONG
+   *
+   * memberId is present only on the logged-in user's own picks.
+   *
+   * Two things the original heuristic parser got wrong, both fixed here:
+   *
+   * 1. cmd.includes('SELECT') also matches SELECTING, whose 30000 (the
+   *    pick clock in ms) became Math.max(...ints) and was recorded as a
+   *    player id. That was the phantom pick. Match SELECTED exactly.
+   *
+   * 2. The trailing <n> is NOT a pick number and NOT a round. Across a
+   *    captured round it varies per pick — team 8 reported 1, then 8, then
+   *    4 on consecutive turns — so its meaning is unknown. Worse, when it
+   *    happened to equal the team id ("SELECTED 2 4242335 2") the old
+   *    `find(n => n !== teamId)` returned undefined and silently fell back
+   *    to picks.length + 1, inventing pick numbers that were never real.
+   *
+   * Pick order therefore comes from frame ARRIVAL order, which is
+   * authoritative: the capture reconstructed a clean 8-team snake from it.
+   * Tokens are read positionally now rather than by size heuristics.
    */
   function parseFrame(text) {
     if (!text) return;
@@ -105,20 +126,16 @@
 
     const tokens = text.trim().split(/\s+/);
     const cmd = (tokens[0] || '').toUpperCase();
-    if (!cmd.includes('SELECT')) return; // SELECTED / AUTOSELECTED etc.
+    // Exactly SELECTED (or AUTOSELECTED, unobserved but cheap to allow) —
+    // NOT a substring test, which swallowed SELECTING.
+    if (!/^(AUTO)?SELECTED$/.test(cmd)) return;
 
-    const ints = tokens
-      .slice(1)
-      .map((t) => (/^\d+$/.test(t) ? parseInt(t, 10) : null))
-      .filter((n) => n !== null);
-    if (!ints.length) return;
-
-    const playerId = Math.max(...ints);
-    if (playerId < 1000) return; // no plausible player id in this frame
-    const small = ints.filter((n) => n !== playerId);
-    const teamId = small.find((n) => n >= 1 && n <= 64);
-    const pickNo = small.find((n) => n !== teamId && n >= 1 && n <= 600);
-    recordPick(playerId, teamId, pickNo);
+    const teamId = /^\d+$/.test(tokens[1] || '') ? tokens[1] : null;
+    const playerId = /^\d+$/.test(tokens[2] || '') ? tokens[2] : null;
+    // Positional, not "largest int wins". A player id is 4-7 digits; the
+    // floor keeps a malformed frame from registering a junk pick.
+    if (!playerId || Number(playerId) < 1000) return;
+    recordPick(playerId, teamId);
   }
 
   function scanJson(obj) {

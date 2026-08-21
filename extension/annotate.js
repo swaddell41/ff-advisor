@@ -518,7 +518,7 @@
       for (const p of d.picks) {
         const bp = state.byEspn.get(String(p.espn_id)) || null;
         if (p.team_id == null || p.pick_no == null) { order.push({ p, bp }); continue; }
-        const key = `${p.team_id}|${p.pick_no}`;
+        const key = `${p.team_id}|${Math.ceil(Number(p.pick_no) / teams)}`;
         const prev = bySlot.get(key);
         if (!prev) {
           const entry = { p, bp };
@@ -538,13 +538,13 @@
       // round 1 holds slot N.
       //
       // Only trust it once round 1 is exactly complete. This doubles as a
-      // check on our reading of the protocol: pick_no LOOKS like the round
-      // (every early pick reported 1, every round-10 pick reported 10), but
-      // that is inferred, not confirmed against a SELECTED frame. If it is
-      // really an overall pick number this filter yields one entry, the
-      // guard fails, and we fall back to the value-order model instead of
-      // seating every team wrongly and skewing every lookahead number.
-      const r1 = order.filter((e) => String(e.p.pick_no) === '1' && e.p.team_id != null)
+      // check on state.lineup.teams, which is the input most likely to be
+      // wrong: a mock we could not read settings for defaults to 10, and a
+      // live capture turned out to be an 8-team league. If teams is wrong
+      // the round-1 slice cannot come out exactly right, the guard fails,
+      // and we fall back to the value-order model rather than seating every
+      // team wrongly and skewing every lookahead number in the draft.
+      const r1 = order.filter((e) => Number(e.p.pick_no) <= teams && e.p.team_id != null)
         .map((e) => String(e.p.team_id));
       const r1uniq = [...new Set(r1)];
       const seated = r1.length === teams && r1uniq.length === teams;
@@ -579,7 +579,9 @@
           if (String(e.p.team_id) !== String(d.myTeamId)) continue;
           if (!e.bp || !e.bp.position) continue;
           counts[e.bp.position] = (counts[e.bp.position] || 0) + 1;
-          if (e.bp.position === 'QB' && qbRound === null) qbRound = Number(e.p.pick_no) || null;
+          if (e.bp.position === 'QB' && qbRound === null) {
+            qbRound = Math.ceil(Number(e.p.pick_no) / teams) || null;
+          }
         }
         state.myCounts = counts;
         // Mirrors the Sleeper path: a cheap/late QB1 justifies ONE upside
