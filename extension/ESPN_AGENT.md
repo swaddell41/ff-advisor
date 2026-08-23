@@ -116,8 +116,9 @@ Pending live verification:
   itself a flawless snake for fewer teams (live capture: 8-team draft
   minus picks 1-2 read as an immaculate 6-team pattern). Never let
   arrival-order observation outrank a source with real pick numbers
-  (league API, history scrape) — v0.8.2 dropped four real picks to this
-  before the phantom guard learned history entries are undroppable.
+  (league API, history scrape) — pre-v0.8.2 code lost four REAL picks
+  to this illusion before the phantom guard learned that history
+  entries are undroppable.
 - The draft page's leave-guard blocks programmatic `location.reload()`
   silently — a "refresh the tab" instruction must be done by the human
   (F5 + confirm), or the old content script keeps running while looking
@@ -135,6 +136,12 @@ picking the wrong one burned four round-trips in a live draft. Exports
 version, `espnDraft`, `espnBackfillInfo` (incl. the unmade-pick
 sentinel), `espnCmdWords` (protocol census), STATE/INIT frames, both
 frame rings, and `espnDomSample`/`espnHistorySample` (DOM shape samples).
+
+Live breadcrumbs: the recovery pipeline stamps its counters onto
+`<html>` — `data-ffa-hist` (scrape: rows/parsed/picks/domTeams) and
+`data-ffa-apply` (merge: live/backfill/dom/merged/order/teams/seated/
+gap) — readable from ANY page console or automation, which is what made
+the 6-teams-illusion diagnosable in a live room. Keep them.
 
 ## Test suites (run all: `for t in extension/*-test.js; do node $t; done`)
 
