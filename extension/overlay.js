@@ -31,6 +31,8 @@
   const WIDTH = 360;
   const HEIGHT = Math.min(680, Math.round(window.innerHeight * 0.85));
 
+  // Scoreboard-graphite skin (claude.ai/design "Draft Advisor Panel" 4a):
+  // warm graphite, amber accent, square corners, mono type.
   const root = document.createElement('div');
   root.id = 'ffa-overlay';
   Object.assign(root.style, {
@@ -39,12 +41,11 @@
     right: '12px',
     width: WIDTH + 'px',
     zIndex: 2147483646,
-    borderRadius: '10px',
     overflow: 'hidden',
-    boxShadow: '0 8px 30px rgba(0,0,0,0.45)',
-    border: '1px solid #2a2f3a',
-    background: '#0f1115',
-    fontFamily: 'Menlo, monospace',
+    boxShadow: '0 16px 36px -20px oklch(0.2 0.02 70 / 0.6), 0 8px 30px rgba(0,0,0,0.45)',
+    border: '1px solid oklch(0.34 0.012 70)',
+    background: 'oklch(0.14 0.008 70)',
+    fontFamily: "'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace",
   });
 
   // Header / drag handle
@@ -53,14 +54,17 @@
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '6px 10px',
-    background: '#171a21',
-    color: '#e6e8ee',
-    fontSize: '12px',
+    padding: '8px 12px',
+    background: 'oklch(0.2 0.008 70)',
+    borderBottom: '1px solid oklch(0.3 0.01 70)',
+    color: 'oklch(0.95 0.005 80)',
+    fontSize: '10px',
+    fontWeight: '600',
+    letterSpacing: '0.14em',
     cursor: 'move',
     userSelect: 'none',
   });
-  header.innerHTML = '<span>⚡ Draft Assistant</span>';
+  header.innerHTML = '<span><span style="color:oklch(0.8 0.13 75)">★</span> DRAFT ASSISTANT</span>';
 
   const buttons = document.createElement('span');
   const mkBtn = (label, title) => {
@@ -70,14 +74,14 @@
     Object.assign(b.style, {
       background: 'transparent',
       border: 'none',
-      color: '#8b93a5',
+      color: 'oklch(0.6 0.02 70)',
       cursor: 'pointer',
       fontSize: '13px',
       marginLeft: '8px',
       fontFamily: 'inherit',
     });
-    b.addEventListener('mouseenter', () => (b.style.color = '#e6e8ee'));
-    b.addEventListener('mouseleave', () => (b.style.color = '#8b93a5'));
+    b.addEventListener('mouseenter', () => (b.style.color = 'oklch(0.8 0.13 75)'));
+    b.addEventListener('mouseleave', () => (b.style.color = 'oklch(0.6 0.02 70)'));
     return b;
   };
   const collapseBtn = mkBtn('—', 'Collapse');
@@ -93,7 +97,7 @@
     height: HEIGHT + 'px',
     border: 'none',
     display: 'block',
-    background: '#0f1115',
+    background: 'oklch(0.14 0.008 70)',
   });
 
   root.appendChild(header);
