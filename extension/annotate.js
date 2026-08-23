@@ -746,13 +746,27 @@
     return null;
   }
 
+  // Live-debugging breadcrumbs: the content script's world is unreachable
+  // from the page console, so the interesting counters are stamped onto
+  // <html> where any console (or agent) can read them.
+  function stamp(attr, val) {
+    try {
+      if (document.documentElement.getAttribute(attr) !== val) {
+        document.documentElement.setAttribute(attr, val);
+      }
+    } catch (_) {}
+  }
+
   let lastHistScrape = 0;
   function scrapeEspnHistory() {
     if (isSleeper || !state.byName.size) return;
     // Only worth the DOM sweep when there is a gap to heal (or a previous
     // harvest to keep fresh) — a pre-gap harvest would be thrown away
     // anyway, since recovered history is deliberately not persisted.
-    if (!state.espnGap && !state.espnGapSeen && !state.domHistory) return;
+    if (!state.espnGap && !state.espnGapSeen && !state.domHistory) {
+      stamp('data-ffa-hist', 'idle');
+      return;
+    }
     const now = Date.now();
     if (now - lastHistScrape < 2000) return;
     lastHistScrape = now;
@@ -784,7 +798,7 @@
           rowEls.push(r);
         }
       }
-      if (!rowEls.length) return;
+      if (!rowEls.length) { stamp('data-ffa-hist', 'no-rows'); return; }
 
       const cellRows = rowEls.map((r) => {
         let cs = [...r.querySelectorAll('.public_fixedDataTableCell_cellContent')];
@@ -793,7 +807,7 @@
         return cs.map((e) => (e.textContent || '').trim()).filter(Boolean).slice(0, 8);
       });
       const parsed = parseEspnHistoryCells(cellRows, teams, maxPick);
-      if (!parsed.length) return;
+      if (!parsed.length) { stamp('data-ffa-hist', `rows:${rowEls.length} parsed:0`); return; }
 
       // Identify the player: headshot id (…/full/<id>.png) first, then an
       // exact board-name TEXT NODE inside the row (the badge scanner
@@ -834,13 +848,24 @@
           picks.push({ espn_id: String(p.espn_id), team_id: null, pick_no: row.pick_no });
         }
       }
-      if (!picks.length) return;
+      if (!picks.length) {
+        stamp('data-ffa-hist', `rows:${rowEls.length} parsed:${parsed.length} picks:0`);
+        return;
+      }
       const prev = state.domHistory || [];
       const grown = picks.length !== prev.length ||
         picks.some((p, i) => !prev[i] || prev[i].espn_id !== p.espn_id || prev[i].pick_no !== p.pick_no);
       state.domHistory = picks;
-      if (grown && state.espnReapply) state.espnReapply();
-    } catch (_) { /* recovery must never break the page */ }
+      stamp('data-ffa-hist', `rows:${rowEls.length} parsed:${parsed.length} picks:${picks.length} ` +
+        `grown:${grown} reapply:${!!state.espnReapply}`);
+      // While a gap persists, re-apply on every scrape — not only when the
+      // scrape output changes. A reapply missed once (for any reason) must
+      // not latch the recovery off forever behind an unchanged `grown`.
+      if ((grown || state.espnGap) && state.espnReapply) state.espnReapply();
+    } catch (e) {
+      stamp('data-ffa-hist', 'err:' + String((e && e.message) || e).slice(0, 120));
+      /* recovery must never break the page */
+    }
   }
 
   // ── League size, observed ─────────────────────────────────────────────
@@ -1297,6 +1322,8 @@
       // phantoms, which was inflating currentPick and producing absurd
       // falling-value deltas on the badges.
       setCurrentPick(order.length + 1);
+      stamp('data-ffa-apply', `live:${d.picks.length} backfill:${(state.espnBackfill || []).length} ` +
+        `dom:${(state.domHistory || []).length} order:${order.length} gap:${state.espnGap}`);
       recommend();
     };
     chrome.storage.local.get(['espnDraft'], (v) => {
