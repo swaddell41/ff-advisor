@@ -1323,7 +1323,10 @@
       // falling-value deltas on the badges.
       setCurrentPick(order.length + 1);
       stamp('data-ffa-apply', `live:${d.picks.length} backfill:${(state.espnBackfill || []).length} ` +
-        `dom:${(state.domHistory || []).length} order:${order.length} gap:${state.espnGap}`);
+        `dom:${(state.domHistory || []).length} merged:${merged.length} order:${order.length} gap:${state.espnGap}`);
+      stamp('data-ffa-merge', JSON.stringify(merged.map((p) =>
+        `${p.pick_no}:${p.espn_id}:${p.team_id}${state.byEspn.get(String(p.espn_id)) ? '' : ':NOBOARD'}`)));
+      stamp('data-ffa-live', JSON.stringify(d.picks.map((p) => `${p.pick_no}:${p.espn_id}:${p.team_id}`)));
       recommend();
     };
     chrome.storage.local.get(['espnDraft'], (v) => {
