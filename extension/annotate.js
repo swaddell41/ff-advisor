@@ -777,7 +777,15 @@
       // Anchor on the history table's own header: a row whose cells read
       // PICK / PLAYER / TEAM (each round section repeats it). Scoping rows
       // to those tables is what makes integer pick labels safe.
+      const cellsOfEl = (r) => {
+        let cs = [...r.querySelectorAll('.public_fixedDataTableCell_cellContent')];
+        if (!cs.length) cs = [...r.querySelectorAll('td,th')];
+        if (!cs.length) cs = [...r.children];
+        return cs.map((e) => (e.textContent || '').trim()).filter(Boolean).slice(0, 8);
+      };
       const rowEls = [];
+      const rowTable = [];      // parallel to rowEls: which anchored table
+      const tableTeamIdx = [];  // per table: index of the TEAM column
       const seenTables = new Set();
       const seenRows = new Set();
       const heads = [...document.querySelectorAll('th,td,div,span')].filter((e) =>
@@ -790,24 +798,36 @@
         const table = headerRow.closest('table,[role="table"],[role="grid"]') || headerRow.parentElement;
         if (!table || seenTables.has(table)) continue;
         seenTables.add(table);
+        const ti = tableTeamIdx.length;
+        tableTeamIdx.push(cellsOfEl(headerRow).findIndex((c) => /^team$/i.test(c)));
         let rlist = [...table.querySelectorAll('tr,[role="row"]')];
         if (!rlist.length && headerRow.parentElement) rlist = [...headerRow.parentElement.children];
         for (const r of rlist) {
           if (r === headerRow || seenRows.has(r)) continue;
           seenRows.add(r);
           rowEls.push(r);
+          rowTable.push(ti);
         }
       }
       if (!rowEls.length) { stamp('data-ffa-hist', 'no-rows'); return; }
 
-      const cellRows = rowEls.map((r) => {
-        let cs = [...r.querySelectorAll('.public_fixedDataTableCell_cellContent')];
-        if (!cs.length) cs = [...r.querySelectorAll('td,th')];
-        if (!cs.length) cs = [...r.children];
-        return cs.map((e) => (e.textContent || '').trim()).filter(Boolean).slice(0, 8);
-      });
+      const cellRows = rowEls.map(cellsOfEl);
       const parsed = parseEspnHistoryCells(cellRows, teams, maxPick);
       if (!parsed.length) { stamp('data-ffa-hist', `rows:${rowEls.length} parsed:0`); return; }
+
+      // Team count, from the page's own record: every COMPLETE round table
+      // has exactly `teams` rows. Trust it only once a second round table
+      // exists (which proves the first is complete). This is the mock-safe
+      // answer to the truncated-snake illusion that fooled the arrival
+      // heuristic. Duplicate layout instances parse to zero (their picks
+      // dedupe away), so they never vote.
+      const sizes = [];
+      for (const row of parsed) {
+        const ti = rowTable[row.idx];
+        sizes[ti] = (sizes[ti] || 0) + 1;
+      }
+      const active = sizes.filter((n) => n > 0);
+      state.domTeams = active.length >= 2 ? Math.max(...active) : null;
 
       // Identify the player: headshot id (…/full/<id>.png) first, then an
       // exact board-name TEXT NODE inside the row (the badge scanner
@@ -845,7 +865,12 @@
       for (const row of parsed) {
         const p = playerIn(rowEls[row.idx]) || resolveHistoryName(row.rest, lookup);
         if (p && p.espn_id) {
-          picks.push({ espn_id: String(p.espn_id), team_id: null, pick_no: row.pick_no });
+          // Carry the TEAM-column text: it identifies teams whose only
+          // picks were missed (nothing else can name them).
+          const tIdx = tableTeamIdx[rowTable[row.idx]];
+          const cells = cellRows[row.idx];
+          const team = tIdx >= 0 && cells[tIdx] && cells[tIdx].length <= 40 ? cells[tIdx] : null;
+          picks.push({ espn_id: String(p.espn_id), team, team_id: null, pick_no: row.pick_no });
         }
       }
       if (!picks.length) {
@@ -857,7 +882,7 @@
         picks.some((p, i) => !prev[i] || prev[i].espn_id !== p.espn_id || prev[i].pick_no !== p.pick_no);
       state.domHistory = picks;
       stamp('data-ffa-hist', `rows:${rowEls.length} parsed:${parsed.length} picks:${picks.length} ` +
-        `grown:${grown} reapply:${!!state.espnReapply}`);
+        `domTeams:${state.domTeams} grown:${grown} reapply:${!!state.espnReapply}`);
       // While a gap persists, re-apply on every scrape — not only when the
       // scrape output changes. A reapply missed once (for any reason) must
       // not latch the recovery off forever behind an unchanged `grown`.
@@ -1158,13 +1183,24 @@
       const usedPick = new Set();   // real pick numbers already occupied
       for (const b of state.espnBackfill || []) {
         if (have.has(b.espn_id)) continue;
-        have.set(b.espn_id, b);
+        const e = { espn_id: b.espn_id, team_id: b.team_id, pick_no: b.pick_no, src: 'hist' };
+        have.set(b.espn_id, e);
         usedPick.add(b.pick_no);
-        merged.push(b);
+        merged.push(e);
       }
       for (const b of state.domHistory || []) {
         if (have.has(b.espn_id) || usedPick.has(b.pick_no)) continue;
-        const e = { espn_id: b.espn_id, team_id: null, pick_no: b.pick_no };
+        // The scraped TEAM-column name is a last-resort identity (the
+        // 'dom:' prefix keeps it from colliding with numeric frame ids);
+        // a live or positional id replaces it whenever one exists. It is
+        // what lets teams whose ONLY picks were missed still be seated.
+        const e = {
+          espn_id: b.espn_id,
+          team_id: b.team ? 'dom:' + b.team : null,
+          domTeam: !!b.team,
+          pick_no: b.pick_no,
+          src: 'hist',
+        };
         have.set(b.espn_id, e);
         usedPick.add(b.pick_no);
         merged.push(e);
@@ -1174,7 +1210,10 @@
         const id = String(p.espn_id);
         if (have.has(id)) {           // already known from backfill/history
           const e = have.get(id);
-          if (e.team_id == null && p.team_id != null) e.team_id = String(p.team_id);
+          if ((e.team_id == null || e.domTeam) && p.team_id != null) {
+            e.team_id = String(p.team_id);
+            e.domTeam = false;
+          }
           continue;
         }
         const e = { espn_id: id, team_id: p.team_id, pick_no: ++next };
@@ -1183,11 +1222,17 @@
       }
       merged.sort((a, b) => a.pick_no - b.pick_no);
 
-      // The running draft outranks settings.size, and is the ONLY source in
-      // a mock, where the league API exposes nothing. A live capture was an
-      // 8-team draft against our 10-team default — which alone would have
-      // kept the seating guard below from ever engaging.
-      applyTeamCount(observedTeamCount(merged.map((p) => p.team_id)));
+      // League size. The API's answer (leagueOk) is AUTHORITATIVE — a
+      // truncated live feed can impersonate a smaller league perfectly:
+      // this league's tap missed picks 1-2, and the remaining 11 picks of
+      // the 8-team snake formed a flawless 6-team snake pattern, which
+      // outranked the API's 8 and sent every snake computation (and the
+      // phantom guard) wrong. Observation is for mocks only, where the
+      // API exposes nothing — and there the history tab's own complete
+      // round tables (state.domTeams) beat the arrival-order heuristic.
+      if (!leagueOk) {
+        applyTeamCount(state.domTeams || observedTeamCount(merged.map((p) => p.team_id)));
+      }
 
       const teams = state.lineup.teams || 10;
 
@@ -1204,14 +1249,14 @@
       };
       const slotTeam = new Map();
       for (const p of merged) {
-        if (p.team_id != null && p.pick_no != null && !slotTeam.has(slotOfPick(p.pick_no))) {
+        if (p.team_id != null && !p.domTeam && p.pick_no != null && !slotTeam.has(slotOfPick(p.pick_no))) {
           slotTeam.set(slotOfPick(p.pick_no), String(p.team_id));
         }
       }
       for (const p of merged) {
-        if (p.team_id == null && p.pick_no != null) {
+        if ((p.team_id == null || p.domTeam) && p.pick_no != null) {
           const t = slotTeam.get(slotOfPick(p.pick_no));
-          if (t != null) p.team_id = t;
+          if (t != null) { p.team_id = t; p.domTeam = false; }
         }
       }
 
@@ -1235,6 +1280,14 @@
           const entry = { p, bp };
           bySlot.set(key, entry);
           order.push(entry);            // entry is mutated in place below,
+        } else if (p.src === 'hist') {
+          // Backfill/history entries carry REAL pick numbers from ESPN's
+          // own record and are board-matched by construction — a key
+          // collision here means the TEAM attribution is wrong (e.g. a
+          // mis-observed team count), never that the pick didn't happen.
+          // Dropping them cost 4 real picks in the live 6-teams-illusion
+          // incident; they are undroppable.
+          order.push({ p, bp });
         } else if (!prev.bp && bp) {    // so `order` keeps arrival order
           prev.p = p; prev.bp = bp;     // while upgrading phantom -> real
         }
@@ -1323,7 +1376,8 @@
       // falling-value deltas on the badges.
       setCurrentPick(order.length + 1);
       stamp('data-ffa-apply', `live:${d.picks.length} backfill:${(state.espnBackfill || []).length} ` +
-        `dom:${(state.domHistory || []).length} merged:${merged.length} order:${order.length} gap:${state.espnGap}`);
+        `dom:${(state.domHistory || []).length} merged:${merged.length} order:${order.length} ` +
+        `teams:${teams} seated:${!!state.mySlot} gap:${state.espnGap}`);
       stamp('data-ffa-merge', JSON.stringify(merged.map((p) =>
         `${p.pick_no}:${p.espn_id}:${p.team_id}${state.byEspn.get(String(p.espn_id)) ? '' : ':NOBOARD'}`)));
       stamp('data-ffa-live', JSON.stringify(d.picks.map((p) => `${p.pick_no}:${p.espn_id}:${p.team_id}`)));
