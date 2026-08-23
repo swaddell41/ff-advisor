@@ -76,11 +76,18 @@ seating + roster-aware run model engaged (audit panel showed the room
 model, snake math agreed with ESPN's own header: pick #23 = round 3 pick
 7 in an 8-team room).
 
+Verified live (league 1569859610, LM-paused test draft, 2026-08-23,
+v0.8.2): the full missed-pick recovery chain — tap joined after pick 2,
+Pick History scrape recovered every missed pick with correct overall
+numbers, `domTeams` corrected a mis-observed team count (see the
+truncated-snake illusion below), TEAM-column names seated the two teams
+whose only picks were missed, and the round model re-engaged
+(`seated:true gap:0`). Breadcrumbs (`data-ffa-hist`/`data-ffa-apply` on
+`<html>`) made the diagnosis and remain in place.
+
 Pending live verification:
-1. Mid-draft refresh persistence (v0.5.6) — join a mock, 5+ picks,
-   refresh, roster/pool must survive.
-2. The v0.6.0 completion-plan engine in any live room (both platforms).
-3. `mDraftDetail` backfill against the REAL September league (cannot be
+1. The v0.6.0 completion-plan engine in any live room (both platforms).
+2. `mDraftDetail` backfill against the REAL September league (cannot be
    tested before a real draft exists).
 
 ## Landmines — violating these bricks the ESPN app or the extension
@@ -104,6 +111,17 @@ Pending live verification:
 - Corporate networks can block the draft WebSocket; ESPN also rejects
   JOIN when a stale draft session is open elsewhere (`connect @ draft.js`
   failures with the extension disabled proved this is ESPN-side, not us).
+- A truncated snake feed can IMPERSONATE a smaller league perfectly: a
+  tap that misses the head of round 1 sees a shorter sequence that is
+  itself a flawless snake for fewer teams (live capture: 8-team draft
+  minus picks 1-2 read as an immaculate 6-team pattern). Never let
+  arrival-order observation outrank a source with real pick numbers
+  (league API, history scrape) — v0.8.2 dropped four real picks to this
+  before the phantom guard learned history entries are undroppable.
+- The draft page's leave-guard blocks programmatic `location.reload()`
+  silently — a "refresh the tab" instruction must be done by the human
+  (F5 + confirm), or the old content script keeps running while looking
+  perfectly alive.
 - A `WebSocket connection failed: construct @ inject-espn.js:45` stack is
   ATTRIBUTION, not causation — Chrome blames the construction site. The
   SSE fallback failing identically proves it isn't the tap.
