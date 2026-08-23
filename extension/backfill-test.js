@@ -5,11 +5,13 @@ function merge(backfill, domHistory, livePicks) {
   const merged = [], have = new Map(), usedPick = new Set();
   for (const b of backfill || []) {
     if (have.has(b.espn_id)) continue;
-    have.set(b.espn_id, b); usedPick.add(b.pick_no); merged.push(b);
+    const e = { espn_id: b.espn_id, team_id: b.team_id, pick_no: b.pick_no, src: 'hist' };
+    have.set(b.espn_id, e); usedPick.add(b.pick_no); merged.push(e);
   }
   for (const b of domHistory || []) {
     if (have.has(b.espn_id) || usedPick.has(b.pick_no)) continue;
-    const e = { espn_id: b.espn_id, team_id: null, pick_no: b.pick_no };
+    const e = { espn_id: b.espn_id, team_id: b.team ? 'dom:' + b.team : null,
+                domTeam: !!b.team, pick_no: b.pick_no, src: 'hist' };
     have.set(b.espn_id, e); usedPick.add(b.pick_no); merged.push(e);
   }
   let next = merged.reduce((m, b) => Math.max(m, b.pick_no), 0);
@@ -17,7 +19,10 @@ function merge(backfill, domHistory, livePicks) {
     const id = String(p.espn_id);
     if (have.has(id)) {
       const e = have.get(id);
-      if (e.team_id == null && p.team_id != null) e.team_id = String(p.team_id);
+      if ((e.team_id == null || e.domTeam) && p.team_id != null) {
+        e.team_id = String(p.team_id);
+        e.domTeam = false;
+      }
       continue;
     }
     const e = { espn_id: id, team_id: p.team_id, pick_no: ++next };
@@ -26,28 +31,53 @@ function merge(backfill, domHistory, livePicks) {
   return merged.sort((a, b) => a.pick_no - b.pick_no);
 }
 
-// Positional team attribution for history-recovered picks (no team id):
-// in a snake draft the pick number names the slot, any other pick from
-// the same slot names the team. Mirrors applyEspn.
+// Positional team attribution for history-recovered picks: in a snake
+// draft the pick number names the slot, any other pick from the same
+// slot names the team; scraped team NAMES are last resort. Mirrors
+// applyEspn.
+const slotOf = (pn, teams) => {
+  const rnd = Math.floor((pn - 1) / teams);
+  const idx = (pn - 1) % teams;
+  return rnd % 2 === 1 ? teams - idx : idx + 1;
+};
 function fillTeams(merged, teams) {
-  const slotOfPick = (pn) => {
-    const rnd = Math.floor((pn - 1) / teams);
-    const idx = (pn - 1) % teams;
-    return rnd % 2 === 1 ? teams - idx : idx + 1;
-  };
   const slotTeam = new Map();
   for (const p of merged) {
-    if (p.team_id != null && p.pick_no != null && !slotTeam.has(slotOfPick(p.pick_no))) {
-      slotTeam.set(slotOfPick(p.pick_no), String(p.team_id));
+    if (p.team_id != null && !p.domTeam && p.pick_no != null && !slotTeam.has(slotOf(p.pick_no, teams))) {
+      slotTeam.set(slotOf(p.pick_no, teams), String(p.team_id));
     }
   }
   for (const p of merged) {
-    if (p.team_id == null && p.pick_no != null) {
-      const t = slotTeam.get(slotOfPick(p.pick_no));
-      if (t != null) p.team_id = t;
+    if ((p.team_id == null || p.domTeam) && p.pick_no != null) {
+      const t = slotTeam.get(slotOf(p.pick_no, teams));
+      if (t != null) { p.team_id = t; p.domTeam = false; }
     }
   }
   return merged;
+}
+
+// Phantom guard mirror: repeated (team, round) is proof of a phantom —
+// but ONLY for arrival-numbered live entries. Backfill/history entries
+// carry real pick numbers and are undroppable (the live 6-teams-illusion
+// incident dropped 4 real picks before this rule existed).
+function phantomGuard(merged, teams, board) {
+  const bySlot = new Map(), order = [];
+  for (const p of merged) {
+    const bp = board.has(String(p.espn_id)) ? { player_id: p.espn_id } : null;
+    if (p.team_id == null || p.pick_no == null) { order.push({ p, bp }); continue; }
+    const key = `${p.team_id}|${Math.ceil(Number(p.pick_no) / teams)}`;
+    const prev = bySlot.get(key);
+    if (!prev) {
+      const entry = { p, bp };
+      bySlot.set(key, entry);
+      order.push(entry);
+    } else if (p.src === 'hist') {
+      order.push({ p, bp });
+    } else if (!prev.bp && bp) {
+      prev.p = p; prev.bp = bp;
+    }
+  }
+  return order;
 }
 let fail = 0;
 const ok = (l, g, w) => { const p = JSON.stringify(g) === JSON.stringify(w);
@@ -158,15 +188,53 @@ ok('history never overrides the API backfill', clash.map(p => p.espn_id), ['real
 // 8-team snake: picks 15-17 belong to slots 2, 3 and 4 of round 2 (snake:
 // pick 15 → slot 2, 16 → slot 1... compute from the mirror itself).
 const attributed = fillTeams(healed, 8);
-const slotOf = (pn) => { const rnd = Math.floor((pn-1)/8), idx = (pn-1)%8;
-  return rnd % 2 === 1 ? 8 - idx : idx + 1; };
-const expect15 = ORDER[slotOf(15) - 1];
+const expect15 = ORDER[slotOf(15, 8) - 1];
 ok('recovered pick attributed to its slot owner',
    attributed.find(p => p.pick_no === 15).team_id, expect15);
 ok('every recovered pick has a team after attribution',
    attributed.filter(p => p.team_id == null).length, 0);
 ok('attribution never rewrites a known team',
    attributed.find(p => p.pick_no === 1).team_id, ORDER[0]);
+
+// ── The live 6-teams-illusion incident (2026-08-22, league 1569859610) ──
+// The tap joined after pick 2 of an 8-team snake. The remaining 11 picks,
+// arrival-renumbered from 1, formed a FLAWLESS 6-team snake pattern:
+// observation adopted 6 teams, snake math misattributed the recovered
+// head picks, and the phantom guard then dropped 4 REAL picks as
+// "collisions". Recorded exactly as captured.
+const LIVE_TEAMS = ['7', '6', '2', '1', '3', '4', '4', '3', '1', '2', '6'];
+const liveTrunc = LIVE_TEAMS.map((t, i) => ({ espn_id: 'e' + (i + 3), team_id: t, pick_no: i + 1 }));
+// True slot owners by team NAME, as the history's TEAM column shows them.
+const NAMES = ['Team 5', 'Team 8', "Sam's", 'Team 6b', "Bobby's", "Cole's", 'Team 3b', 'Team 4b'];
+const domTrunc = Array.from({ length: 13 }, (_, i) => ({
+  espn_id: 'e' + (i + 1), team: NAMES[slotOf(i + 1, 8) - 1], pick_no: i + 1 }));
+const BOARD = new Set(Array.from({ length: 13 }, (_, i) => 'e' + (i + 1)));
+
+const m6 = fillTeams(merge([], domTrunc, liveTrunc), 8);
+ok('illusion: all 13 picks survive the merge', m6.length, 13);
+ok('illusion: live ids replace scraped names where known',
+   m6.find(p => p.pick_no === 3).team_id, '7');
+ok('illusion: missed-head teams identified by the TEAM column',
+   [m6.find(p => p.pick_no === 1).team_id, m6.find(p => p.pick_no === 2).team_id],
+   ['dom:Team 5', 'dom:Team 8']);
+const g8 = phantomGuard(m6, 8, BOARD);
+ok('illusion: correct team count -> nothing dropped', g8.length, 13);
+// Even with the WRONG team count (the mis-observed 6), history entries
+// collide but are undroppable — the old code lost exactly 4 here.
+const g6 = phantomGuard(m6, 6, BOARD);
+ok('illusion: wrong team count still drops nothing from history', g6.length, 13);
+ok('round 1 seats all 8 teams', new Set(
+   m6.filter(p => p.pick_no <= 8).map(p => String(p.team_id))).size, 8);
+
+// A live phantom colliding with a history entry stays dead. Team 4
+// already holds a round-2 pick (#9), so the phantom (appended at #14,
+// also round 2) collides with a board-matched entry and is dropped.
+const withPhantom = fillTeams(merge([], domTrunc,
+  [...liveTrunc, { espn_id: '30000', team_id: '4', pick_no: 12 }]), 8);
+const gp = phantomGuard(withPhantom, 8, BOARD);
+ok('live phantom sharing a history slot is dropped',
+   gp.filter(e => e.p.espn_id === '30000').length, 0);
+ok('the history picks all survive the phantom', gp.filter(e => e.p.src === 'hist').length, 13);
 
 console.log(fail ? `\n${fail} FAILED` : '\nall assertions passed');
 process.exit(fail ? 1 : 0);

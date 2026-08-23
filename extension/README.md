@@ -1,36 +1,46 @@
 # Dynasty Advisor — Draft Assistant (Chrome extension)
 
-A Chrome MV3 extension that turns Sleeper (and, in progress, ESPN) draft
-pages into an advised draft board. It does **not** replace the site's UI —
-it injects value badges into the site's own player rows, keeps a fixed
-"★ PICK" strip with roster-aware recommendations, and can explain every
-recommendation it makes via an audit panel.
+A Chrome MV3 extension that turns **Sleeper and ESPN** draft rooms into
+an advised draft board. It does **not** replace the site's UI — it
+injects value badges into the site's own player rows, keeps a fixed
+recommendation bar on screen with roster-aware picks, and explains every
+recommendation it makes via a tabbed audit panel. Both platforms are
+live-verified, including recovering picks missed while an ESPN tab was
+closed or refreshing.
 
 Backed by the ff-advisor backend (`/api/draftboard` on the Vercel
 deployment), which blends RosterAudit + FantasyCalc values (redraft values
 for seasonal drafts, dynasty values otherwise), normalized to a 0–10k
-scale, refreshed daily.
+scale, refreshed daily. The API URL is baked into `annotate.js`/`panel.js`
+(`API_BASE`) — if you fork this, point it at your own deployment.
 
 ## Install
 
 1. `chrome://extensions` → enable Developer mode → **Load unpacked** →
    select this `extension/` directory.
-2. Open a Sleeper draft (`sleeper.com/draft/nfl/<id>`, mock drafts work).
+2. Open a draft:
+   - **Sleeper**: `sleeper.com/draft/nfl/<id>` — mock drafts work and
+     behave identically to real drafts.
+   - **ESPN**: any league or mock draft room. Best experience: have the
+     tab open from pick 1. If you join or refresh mid-draft, follow the
+     pill's prompt (open the Pick History tab once) and the missed picks
+     are recovered from the page's own record.
 3. **After reloading the extension you must refresh any open draft tabs**
    — orphaned content scripts from the old version cannot talk to the new
-   service worker ("Extension context invalidated").
+   service worker ("Extension context invalidated"). On ESPN the refresh
+   must be a real F5 (their draft room blocks programmatic reloads).
 
 Identity is zero-setup on Sleeper (the logged-in user id is read from the
-page's localStorage). If roster detection fails, click the ★ strip and
-enter your Sleeper username.
+page's localStorage); if roster detection fails, click the bar and enter
+your Sleeper username. On ESPN your team is recognized from your own
+picks automatically.
 
 ## What you see
 
 - **Badges** in each player row (placed inside the position/team meta line
   so names never truncate): `1.8k T3 ↑11` = our value, positional tier,
   and falling-value delta vs. current pick. Green = value falling to you.
-- **Footer bar** (bottom-left, scoreboard-graphite styling from the
-  claude.ai/design "Draft Advisor Panel" project, direction 4a): amber
+- **Footer bar** (bottom-left, scoreboard-graphite styling): amber
   `★ BOWERS 6.1k TE` block, `−2.5k if you wait` (cost of waiting on the
   top pick), `⚠ QB run risk`, the next-best two, picks left / K-DST
   reserve, and the `why?` panel toggle.
@@ -83,7 +93,7 @@ slots, superflex, rounds) — nothing is hardcoded to a league size.
    assumed of opponents). Runs emerge naturally: six QB-needy teams
    between your picks means six QBs likely gone. A worst-case bound per
    position (every team that could start it takes it) powers the "if a
-   run" audit column and the strip's run warning. The score stays on the
+   run" audit column and the bar's run warning. The score stays on the
    expected outcome — risk is surfaced, not baked in.
 6. **Dual-regime scoring.** Starters phase = VORP + vanishing value.
    Bench phase = raw value + vanishing value (late RB/WRs all have VORP≈0
@@ -97,7 +107,7 @@ slots, superflex, rounds) — nothing is hardcoded to a league size.
 8. **Need multipliers.** Positional appetite decays with what you've
    drafted (QB in 1QB: [1.0, 0.3, 0.1]; superflex: [1.1, 1.0, 0.5, 0.15];
    TE: [1.0, 0.4, 0.15]; RB/WR decay gently). K/DST aren't on the board;
-   the strip tells you when remaining picks should be reserved for them.
+   the bar tells you when remaining picks should be reserved for them.
 
 ## Architecture
 

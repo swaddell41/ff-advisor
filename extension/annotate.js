@@ -99,7 +99,9 @@
   document.documentElement.appendChild(reco);
   reco.addEventListener('click', (ev) => {
     if (ev.target && ev.target.id === 'ffa-why') { toggleAudit(); return; }
-    if (!state.myCounts && !state.myUserId) {
+    // Username lookup is a Sleeper concept; on ESPN the team is detected
+    // from the user's own picks, so prompting here would mislead.
+    if (isSleeper && !state.myCounts && !state.myUserId) {
       const u = window.prompt('Your Sleeper username (for roster-aware recommendations):');
       if (u && u.trim()) {
         try { chrome.storage.local.set({ username: u.trim() }); } catch (_) {}
@@ -177,7 +179,9 @@
       `<div style="background:${UI.amber};color:${UI.amberDark};width:84px;flex:0 0 auto;` +
       'display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 0">' +
         `<div style="font-family:${UI.mono};font-size:24px;font-weight:600;line-height:1">${t0.pos}</div>` +
-        `<div style="font-family:${UI.mono};font-size:10px;letter-spacing:0.08em;opacity:0.75">RANK ${t0.posRank || 1}</div>` +
+        (t0.posRank
+          ? `<div style="font-family:${UI.mono};font-size:10px;letter-spacing:0.08em;opacity:0.75">RANK ${t0.posRank}</div>`
+          : '') +
       '</div>' +
       '<div style="flex:1;padding:15px 18px;min-width:0">' +
         `<div style="font-family:${UI.sans};font-size:26px;font-weight:700;color:oklch(0.97 0.005 80);` +
@@ -446,6 +450,8 @@
     allPlayers: [],      // full board, for global recommendations
     domHistory: null,    // ESPN Pick History scrape: [{espn_id, team_id:null, pick_no}]
     espnReapply: null,   // set by the ESPN adapter; re-runs applyEspn after a scrape
+    espnGapSeen: false,  // gap observed and not yet provably healed (survives a pause)
+    rosterHelp: 'roster unknown — click to set username', // platform-accurate bar hint
     updatingPid: null,   // top pick whose row vanished — data is catching up
     updatingSince: 0,
     lineup: { teams: 10, qb: 1, rb: 2, wr: 2, te: 1, flex: 1, sf: 0, k: 0, dst: 0, rounds: 15 },
@@ -678,25 +684,34 @@
   // mock B (same storage, different rooms). The DOM is re-scrapable on
   // demand, so a second refresh just re-prompts.
 
-  // Rows-of-cell-texts → [{pick_no, rest, idx}]. Recognition mirrors the
-  // sticky sampler: the FIRST cell alone must be a numerically-bounded pick
-  // label ("3.04" / "R3 P4") — loose matching once recorded a 77.2
-  // projection. (Lifted verbatim by espn-history-test.js.)
+  // Rows-of-cell-texts → [{pick_no, rest, idx}]. A live capture (paused
+  // mock, v0.8.0) showed the real Pick History labels its rows with PLAIN
+  // OVERALL pick integers ("1".."13", continuing across "Round N" section
+  // headers) — not the "3.04" style the sticky sampler guessed at (which
+  // is why that sampler never fired). Integers are only safe because the
+  // caller scopes rows to tables under a PICK/PLAYER/TEAM header — the
+  // player list also starts rows with an integer (the rank), but its
+  // header has no TEAM column. Dotted and R#P# forms are kept for other
+  // room skins. (Lifted verbatim by espn-history-test.js.)
   function parseEspnHistoryCells(rows, teams, maxPick) {
     const out = new Map();
     for (let i = 0; i < (rows || []).length; i++) {
       const cells = rows[i];
       if (!cells || cells.length < 2) continue;
       const label = String(cells[0]).trim();
-      let rd = 0;
-      let pk = 0;
+      let pick_no = 0;
       const dot = /^(\d{1,2})\.(\d{1,2})$/.exec(label);
       const rp = /^R(\d{1,2})\s*P(\d{1,2})$/i.exec(label);
-      if (dot) { rd = Number(dot[1]); pk = Number(dot[2]); }
-      else if (rp) { rd = Number(rp[1]); pk = Number(rp[2]); }
-      else continue;
-      if (rd < 1 || rd > 30 || pk < 1 || pk > teams) continue;
-      const pick_no = (rd - 1) * teams + pk;
+      const whole = /^#?(\d{1,3})$/.exec(label);
+      if (dot || rp) {
+        const m = dot || rp;
+        const rd = Number(m[1]);
+        const pk = Number(m[2]);
+        if (rd < 1 || rd > 30 || pk < 1 || pk > teams) continue;
+        pick_no = (rd - 1) * teams + pk;
+      } else if (whole) {
+        pick_no = Number(whole[1]);
+      } else continue;
       if (pick_no < 1 || pick_no > maxPick) continue;
       if (out.has(pick_no)) continue;
       out.set(pick_no, { rest: cells.slice(1), idx: i });
@@ -731,51 +746,151 @@
     return null;
   }
 
+  // Live-debugging breadcrumbs: the content script's world is unreachable
+  // from the page console, so the interesting counters are stamped onto
+  // <html> where any console (or agent) can read them.
+  function stamp(attr, val) {
+    try {
+      if (document.documentElement.getAttribute(attr) !== val) {
+        document.documentElement.setAttribute(attr, val);
+      }
+    } catch (_) {}
+  }
+
   let lastHistScrape = 0;
   function scrapeEspnHistory() {
     if (isSleeper || !state.byName.size) return;
+    // Only worth the DOM sweep when there is a gap to heal (or a previous
+    // harvest to keep fresh) — a pre-gap harvest would be thrown away
+    // anyway, since recovered history is deliberately not persisted.
+    if (!state.espnGap && !state.espnGapSeen && !state.domHistory) {
+      stamp('data-ffa-hist', 'idle');
+      return;
+    }
     const now = Date.now();
     if (now - lastHistScrape < 2000) return;
     lastHistScrape = now;
     try {
-      const txt = (el) => (el && el.textContent ? el.textContent.trim() : '');
       const teams = state.lineup.teams || 10;
       const maxPick = (state.lineup.rounds || 17) * teams;
-      const rowEls = [...document.querySelectorAll('[role="row"]')];
-      const rows = [];
-      const imgIds = [];
-      for (const r of rowEls) {
-        const cells = [...r.querySelectorAll('.public_fixedDataTableCell_cellContent')]
-          .map(txt).filter(Boolean).slice(0, 8);
-        if (cells.length < 2) continue;
-        rows.push(cells);
-        // Headshot URLs carry the ESPN player id (…/full/<id>.png) — a
-        // far stronger identity than name matching when present.
-        const img = r.querySelector('img[src*="/full/"]');
-        const m = img && /\/full\/(\d+)\./.exec(img.getAttribute('src') || '');
-        imgIds.push(m ? m[1] : null);
+
+      // Anchor on the history table's own header: a row whose cells read
+      // PICK / PLAYER / TEAM (each round section repeats it). Scoping rows
+      // to those tables is what makes integer pick labels safe.
+      const cellsOfEl = (r) => {
+        let cs = [...r.querySelectorAll('.public_fixedDataTableCell_cellContent')];
+        if (!cs.length) cs = [...r.querySelectorAll('td,th')];
+        if (!cs.length) cs = [...r.children];
+        return cs.map((e) => (e.textContent || '').trim()).filter(Boolean).slice(0, 8);
+      };
+      const rowEls = [];
+      const rowTable = [];      // parallel to rowEls: which anchored table
+      const tableTeamIdx = [];  // per table: index of the TEAM column
+      const seenTables = new Set();
+      const seenRows = new Set();
+      const heads = [...document.querySelectorAll('th,td,div,span')].filter((e) =>
+        e.childElementCount === 0 && /^pick$/i.test((e.textContent || '').trim()));
+      for (const h of heads) {
+        const headerRow = h.closest('tr,[role="row"]') || h.parentElement;
+        if (!headerRow) continue;
+        const ht = (headerRow.textContent || '').toUpperCase();
+        if (!ht.includes('PLAYER') || !ht.includes('TEAM')) continue;
+        const table = headerRow.closest('table,[role="table"],[role="grid"]') || headerRow.parentElement;
+        if (!table || seenTables.has(table)) continue;
+        seenTables.add(table);
+        const ti = tableTeamIdx.length;
+        tableTeamIdx.push(cellsOfEl(headerRow).findIndex((c) => /^team$/i.test(c)));
+        let rlist = [...table.querySelectorAll('tr,[role="row"]')];
+        if (!rlist.length && headerRow.parentElement) rlist = [...headerRow.parentElement.children];
+        for (const r of rlist) {
+          if (r === headerRow || seenRows.has(r)) continue;
+          seenRows.add(r);
+          rowEls.push(r);
+          rowTable.push(ti);
+        }
       }
-      const parsed = parseEspnHistoryCells(rows, teams, maxPick);
-      if (!parsed.length) return;
+      if (!rowEls.length) { stamp('data-ffa-hist', 'no-rows'); return; }
+
+      const cellRows = rowEls.map(cellsOfEl);
+      const parsed = parseEspnHistoryCells(cellRows, teams, maxPick);
+      if (!parsed.length) { stamp('data-ffa-hist', `rows:${rowEls.length} parsed:0`); return; }
+
+      // Team count, from the page's own record: every COMPLETE round table
+      // has exactly `teams` rows. Trust it only once a second round table
+      // exists (which proves the first is complete). This is the mock-safe
+      // answer to the truncated-snake illusion that fooled the arrival
+      // heuristic. Duplicate layout instances parse to zero (their picks
+      // dedupe away), so they never vote.
+      const sizes = [];
+      for (const row of parsed) {
+        const ti = rowTable[row.idx];
+        sizes[ti] = (sizes[ti] || 0) + 1;
+      }
+      const active = sizes.filter((n) => n > 0);
+      state.domTeams = active.length >= 2 ? Math.max(...active) : null;
+
+      // Identify the player: headshot id (…/full/<id>.png) first, then an
+      // exact board-name TEXT NODE inside the row (the badge scanner
+      // already proves names render as exact text nodes there), then the
+      // composite-cell heuristic as a last resort.
       const lookup = (s) => {
         const m = state.byName.get(norm(String(s)));
         return m && m.length === 1 ? m[0] : null;
       };
+      const playerIn = (row) => {
+        const img = row.querySelector('img[src*="/full/"]');
+        const m = img && /\/full\/(\d+)\./.exec(img.getAttribute('src') || '');
+        if (m) {
+          const p = state.byEspn.get(m[1]);
+          if (p) return p;
+        }
+        const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+        let t;
+        let found = null;
+        while ((t = walker.nextNode())) {
+          const s = (t.nodeValue || '').trim();
+          if (s.length < 4 || s.length > 32) continue;
+          const pe = t.parentElement;
+          if (pe && pe.closest('.ffa-badge')) continue;
+          const p = lookup(s);
+          if (p) {
+            if (found && found !== p) return null; // two names in one row — distrust
+            found = p;
+          }
+        }
+        return found;
+      };
+
       const picks = [];
       for (const row of parsed) {
-        const byImg = imgIds[row.idx] ? state.byEspn.get(imgIds[row.idx]) : null;
-        const p = byImg || resolveHistoryName(row.rest, lookup);
+        const p = playerIn(rowEls[row.idx]) || resolveHistoryName(row.rest, lookup);
         if (p && p.espn_id) {
-          picks.push({ espn_id: String(p.espn_id), team_id: null, pick_no: row.pick_no });
+          // Carry the TEAM-column text: it identifies teams whose only
+          // picks were missed (nothing else can name them).
+          const tIdx = tableTeamIdx[rowTable[row.idx]];
+          const cells = cellRows[row.idx];
+          const team = tIdx >= 0 && cells[tIdx] && cells[tIdx].length <= 40 ? cells[tIdx] : null;
+          picks.push({ espn_id: String(p.espn_id), team, team_id: null, pick_no: row.pick_no });
         }
       }
-      if (!picks.length) return;
+      if (!picks.length) {
+        stamp('data-ffa-hist', `rows:${rowEls.length} parsed:${parsed.length} picks:0`);
+        return;
+      }
       const prev = state.domHistory || [];
       const grown = picks.length !== prev.length ||
         picks.some((p, i) => !prev[i] || prev[i].espn_id !== p.espn_id || prev[i].pick_no !== p.pick_no);
       state.domHistory = picks;
-      if (grown && state.espnReapply) state.espnReapply();
-    } catch (_) { /* recovery must never break the page */ }
+      stamp('data-ffa-hist', `rows:${rowEls.length} parsed:${parsed.length} picks:${picks.length} ` +
+        `domTeams:${state.domTeams} grown:${grown} reapply:${!!state.espnReapply}`);
+      // While a gap persists, re-apply on every scrape — not only when the
+      // scrape output changes. A reapply missed once (for any reason) must
+      // not latch the recovery off forever behind an unchanged `grown`.
+      if ((grown || state.espnGap) && state.espnReapply) state.espnReapply();
+    } catch (e) {
+      stamp('data-ffa-hist', 'err:' + String((e && e.message) || e).slice(0, 120));
+      /* recovery must never break the page */
+    }
   }
 
   // ── League size, observed ─────────────────────────────────────────────
@@ -824,6 +939,7 @@
       const scoring = (d.metadata && d.metadata.scoring_type) || '';
       state.format = (s.slots_super_flex || 0) > 0 || scoring.includes('2qb') ? 'sf_ppr' : '1qb_ppr';
       state.mode = scoring.includes('dynasty') ? 'dynasty' : 'redraft';
+      state.rosterHelp = 'roster unknown — click to set username';
       state.draftType = d.type || 'snake';
       if (state.myUserId && d.draft_order && d.draft_order[state.myUserId]) {
         state.mySlot = d.draft_order[state.myUserId];
@@ -898,6 +1014,9 @@
 
   async function watchEspnPicks() {
     state.format = '1qb_ppr';
+    // No username concept here — the team is recognized from the user's
+    // own SELECTED frames (memberId rides only on own picks).
+    state.rosterHelp = 'roster unknown — it registers on your first pick';
     // Explicit, not defaulted: Sam's ESPN leagues are seasonal, so the
     // board must price off redraft values (fc_redraft). If an ESPN dynasty
     // league ever matters, detect it here — the engine itself is mode-blind
@@ -1028,8 +1147,12 @@
     };
     await fetchBackfill();
     // Cheap (one request), and the only thing that can recover picks lost
-    // to an outage in a real league.
-    setInterval(() => { fetchBackfill().then(() => pickPollTrigger && pickPollTrigger()); }, 20000);
+    // to an outage in a real league. Re-applies through the adapter — the
+    // old pickPollTrigger call was Sleeper-only and always null here, so
+    // re-polled backfill silently waited for the next frame to matter.
+    setInterval(() => {
+      fetchBackfill().then(() => { if (state.espnReapply) state.espnReapply(); });
+    }, 20000);
 
     // Mock-lobby fallback. Without it the lineup keeps the Sleeper-flavoured
     // defaults (15 rounds, no K/DST), so replacement levels and every snake
@@ -1060,13 +1183,24 @@
       const usedPick = new Set();   // real pick numbers already occupied
       for (const b of state.espnBackfill || []) {
         if (have.has(b.espn_id)) continue;
-        have.set(b.espn_id, b);
+        const e = { espn_id: b.espn_id, team_id: b.team_id, pick_no: b.pick_no, src: 'hist' };
+        have.set(b.espn_id, e);
         usedPick.add(b.pick_no);
-        merged.push(b);
+        merged.push(e);
       }
       for (const b of state.domHistory || []) {
         if (have.has(b.espn_id) || usedPick.has(b.pick_no)) continue;
-        const e = { espn_id: b.espn_id, team_id: null, pick_no: b.pick_no };
+        // The scraped TEAM-column name is a last-resort identity (the
+        // 'dom:' prefix keeps it from colliding with numeric frame ids);
+        // a live or positional id replaces it whenever one exists. It is
+        // what lets teams whose ONLY picks were missed still be seated.
+        const e = {
+          espn_id: b.espn_id,
+          team_id: b.team ? 'dom:' + b.team : null,
+          domTeam: !!b.team,
+          pick_no: b.pick_no,
+          src: 'hist',
+        };
         have.set(b.espn_id, e);
         usedPick.add(b.pick_no);
         merged.push(e);
@@ -1076,7 +1210,10 @@
         const id = String(p.espn_id);
         if (have.has(id)) {           // already known from backfill/history
           const e = have.get(id);
-          if (e.team_id == null && p.team_id != null) e.team_id = String(p.team_id);
+          if ((e.team_id == null || e.domTeam) && p.team_id != null) {
+            e.team_id = String(p.team_id);
+            e.domTeam = false;
+          }
           continue;
         }
         const e = { espn_id: id, team_id: p.team_id, pick_no: ++next };
@@ -1085,11 +1222,17 @@
       }
       merged.sort((a, b) => a.pick_no - b.pick_no);
 
-      // The running draft outranks settings.size, and is the ONLY source in
-      // a mock, where the league API exposes nothing. A live capture was an
-      // 8-team draft against our 10-team default — which alone would have
-      // kept the seating guard below from ever engaging.
-      applyTeamCount(observedTeamCount(merged.map((p) => p.team_id)));
+      // League size. The API's answer (leagueOk) is AUTHORITATIVE — a
+      // truncated live feed can impersonate a smaller league perfectly:
+      // this league's tap missed picks 1-2, and the remaining 11 picks of
+      // the 8-team snake formed a flawless 6-team snake pattern, which
+      // outranked the API's 8 and sent every snake computation (and the
+      // phantom guard) wrong. Observation is for mocks only, where the
+      // API exposes nothing — and there the history tab's own complete
+      // round tables (state.domTeams) beat the arrival-order heuristic.
+      if (!leagueOk) {
+        applyTeamCount(state.domTeams || observedTeamCount(merged.map((p) => p.team_id)));
+      }
 
       const teams = state.lineup.teams || 10;
 
@@ -1106,14 +1249,14 @@
       };
       const slotTeam = new Map();
       for (const p of merged) {
-        if (p.team_id != null && p.pick_no != null && !slotTeam.has(slotOfPick(p.pick_no))) {
+        if (p.team_id != null && !p.domTeam && p.pick_no != null && !slotTeam.has(slotOfPick(p.pick_no))) {
           slotTeam.set(slotOfPick(p.pick_no), String(p.team_id));
         }
       }
       for (const p of merged) {
-        if (p.team_id == null && p.pick_no != null) {
+        if ((p.team_id == null || p.domTeam) && p.pick_no != null) {
           const t = slotTeam.get(slotOfPick(p.pick_no));
-          if (t != null) p.team_id = t;
+          if (t != null) { p.team_id = t; p.domTeam = false; }
         }
       }
 
@@ -1137,6 +1280,14 @@
           const entry = { p, bp };
           bySlot.set(key, entry);
           order.push(entry);            // entry is mutated in place below,
+        } else if (p.src === 'hist') {
+          // Backfill/history entries carry REAL pick numbers from ESPN's
+          // own record and are board-matched by construction — a key
+          // collision here means the TEAM attribution is wrong (e.g. a
+          // mis-observed team count), never that the pick didn't happen.
+          // Dropping them cost 4 real picks in the live 6-teams-illusion
+          // incident; they are undroppable.
+          order.push({ p, bp });
         } else if (!prev.bp && bp) {    // so `order` keeps arrival order
           prev.p = p; prev.bp = bp;     // while upgrading phantom -> real
         }
@@ -1169,6 +1320,11 @@
       // worse than no run model at all. Degrade instead, and say so.
       const domPick = espnPickFromDom();
       state.espnGap = domPick ? Math.max(0, (domPick - 1) - order.length) : 0;
+      // Sticky across a pause: the "ON THE CLOCK" header can leave the DOM
+      // (paused draft), which would read as "no gap" while picks are still
+      // missing. Only a READABLE header showing no gap clears the flag.
+      if (state.espnGap > 0) state.espnGapSeen = true;
+      else if (domPick) state.espnGapSeen = false;
 
       const r1 = order.filter((e) => Number(e.p.pick_no) <= teams && e.p.team_id != null)
         .map((e) => String(e.p.team_id));
@@ -1219,10 +1375,15 @@
       // phantoms, which was inflating currentPick and producing absurd
       // falling-value deltas on the badges.
       setCurrentPick(order.length + 1);
+      stamp('data-ffa-apply', `live:${d.picks.length} backfill:${(state.espnBackfill || []).length} ` +
+        `dom:${(state.domHistory || []).length} merged:${merged.length} order:${order.length} ` +
+        `teams:${teams} seated:${!!state.mySlot} gap:${state.espnGap}`);
       recommend();
     };
     chrome.storage.local.get(['espnDraft'], (v) => {
-      if (v.espnDraft) applyEspn(v.espnDraft);
+      // Run even with nothing stored: the gap check needs a baseline, and
+      // a mid-draft install with zero seen picks is exactly a full gap.
+      applyEspn(v.espnDraft || { picks: [], myTeamId: null });
     });
     chrome.storage.onChanged.addListener((ch) => {
       if (ch.espnDraft && ch.espnDraft.newValue) applyEspn(ch.espnDraft.newValue);
@@ -1267,6 +1428,7 @@
       background: oklch(0.16 0.008 70 / 0.96);
       z-index: 5;
     }
+    .ffa-badge.ffa-picked { opacity: 0.55; }
     .ffa-badge.ffa-steal { color: oklch(0.8 0.14 150); border-color: oklch(0.55 0.09 150 / 0.6); }
     .ffa-badge.ffa-t1 { color: oklch(0.8 0.13 75); border-color: oklch(0.6 0.1 75 / 0.55); }
     .ffa-badge.ffa-best {
@@ -1285,6 +1447,12 @@
   document.documentElement.appendChild(css);
 
   function badgeText(p) {
+    // A drafted player keeps his value/tier (useful in Pick History rows)
+    // but loses the ↑falling-value arrow — "ranked earlier than where the
+    // draft is now" is a stale claim about someone already taken.
+    if (state.pickedIds.has(String(p.player_id))) {
+      return `${(p.value / 1000).toFixed(1)}k T${p.tier}`;
+    }
     const delta = state.currentPick - p.overall_rank;
     const steal = state.currentPick > 1 && delta >= 6 ? ` ↑${delta}` : '';
     return `${(p.value / 1000).toFixed(1)}k T${p.tier}${steal}`;
@@ -1296,9 +1464,11 @@
     el.textContent = el.dataset.compact
       ? `${(p.value / 1000).toFixed(1)}k`
       : badgeText(p);
+    const picked = state.pickedIds.has(String(p.player_id));
     const delta = state.currentPick - p.overall_rank;
-    el.classList.toggle('ffa-steal', state.currentPick > 1 && delta >= 6);
-    el.classList.toggle('ffa-t1', p.tier === 1 && !(state.currentPick > 1 && delta >= 6));
+    el.classList.toggle('ffa-picked', picked);
+    el.classList.toggle('ffa-steal', !picked && state.currentPick > 1 && delta >= 6);
+    el.classList.toggle('ffa-t1', !picked && p.tier === 1 && !(state.currentPick > 1 && delta >= 6));
   }
 
   const processed = new WeakSet();
@@ -1917,7 +2087,7 @@
       runRisk,
       roster: rosterMeta,
       timeline: roomTakes,
-      boardCount: state.byName.size,
+      boardCount: state.allPlayers.length,
       matchedCount: state.badges.size,
       phase: !C ? 'roster unknown' : (benchPhase ? 'bench' : 'filling starters'),
       counts: C ? { ...C } : null,
@@ -1993,7 +2163,7 @@
           : seg(`${a.roster.remaining} left` +
               (a.roster.reserve > 0 ? ` · save ${a.roster.reserve} K/DST` : ''), UI.dim);
       } else {
-        h += seg('roster unknown — click to set username', UI.red);
+        h += seg(state.rosterHelp, UI.red);
       }
       h += '<span style="flex:1"></span>' +
         `<span id="ffa-why" style="padding:11px 14px;display:flex;align-items:center;white-space:nowrap;` +

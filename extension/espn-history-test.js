@@ -22,23 +22,31 @@ const ok = (l, g, w) => { const p = JSON.stringify(g) === JSON.stringify(w);
   if (!p) fail++; console.log(`${p?'PASS':'FAIL'}  ${l}: ${JSON.stringify(g)}${p?'':' want '+JSON.stringify(w)}`); };
 
 // ── Row recognition and pick numbering (10-team room) ────────────────────
+// The live capture (paused 8-team mock, v0.8.0): rows label themselves
+// with PLAIN OVERALL integers ("1".."13", continuing across "Round N"
+// section headers). Integer rows are safe only because the scraper feeds
+// this parser rows scoped to tables under a PICK/PLAYER/TEAM header — the
+// player list also leads with an integer (the rank), but its header has
+// no TEAM column, so its rows never reach here.
 const rows = [
-  ['1.01', 'Jahmyr Gibbs', 'RB', 'Det'],       // dotted label, separate cells
-  ['1.02', 'Bijan Robinson RB Atl'],           // dotted label, composite cell
+  ['1', 'Josh Allen', 'Team 5'],               // live-captured shape: bare int
+  ['2', 'Jayden Daniels', 'Team 8'],
+  ['9', 'Amon-Ra St. Brown', 'Team 4'],        // round 2 continues overall numbering
   ['R2 P5', 'George Pickens WR Pit'],          // R/P label form
-  ['3.04', 'Josh Allen QB Buf'],
+  ['3.04', 'Josh Allen QB Buf'],               // dotted form (other skins)
   ['77.2', 'a projection, not a pick'],        // round 77 → numerically rejected
   ['1.11', 'pick 11 of a 10-team round'],      // pk > teams → rejected
-  ['26', 'a player-list row (rank int)'],      // not a pick label
-  ['1.01', 'duplicate pick slot'],             // same pick_no → first wins
+  ['999', 'beyond any draft'],                 // int past maxPick → rejected
+  ['1', 'duplicate pick slot'],                // same pick_no → first wins
   ['on the clock', 'header noise'],
 ];
 const parsed = parseCells(rows, 10, 170);
-ok('recognises exactly the pick-labelled rows', parsed.map((r) => r.pick_no), [1, 2, 15, 24]);
+ok('recognises exactly the pick-labelled rows', parsed.map((r) => r.pick_no), [1, 2, 9, 15, 24]);
+ok('bare integer is the overall pick number', parsed.find((r) => r.pick_no === 9).rest, ['Amon-Ra St. Brown', 'Team 4']);
 ok('dotted label converts through team count', parsed.find((r) => r.pick_no === 24).rest, ['Josh Allen QB Buf']);
 ok('R/P label converts identically', parsed.find((r) => r.pick_no === 15).rest, ['George Pickens WR Pit']);
-ok('duplicate pick slot keeps the first row', parsed.find((r) => r.pick_no === 1).rest[0], 'Jahmyr Gibbs');
-ok('row index survives for headshot-id lookup', parsed.map((r) => r.idx), [0, 1, 2, 3]);
+ok('duplicate pick slot keeps the first row', parsed.find((r) => r.pick_no === 1).rest[0], 'Josh Allen');
+ok('row index survives for headshot-id lookup', parsed.map((r) => r.idx), [0, 1, 2, 3, 4]);
 ok('beyond the draft horizon rejected', parseCells([['30.10', 'x']], 10, 170), []);
 ok('empty input', parseCells([], 10, 170), []);
 

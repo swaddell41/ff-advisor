@@ -53,7 +53,7 @@ Hard-won parser facts (`content-espn.js`):
 | `chrome.storage` persistence | refresh/reload mid-draft | only what the tap saw (12h TTL, per-league) |
 | `lm-api-reads...?view=mSettings` | real leagues + practice drafts | via background proxy, creds; gives lineup slots, size, rounds |
 | `lm-api-reads...?view=mDraftDetail` (20s poll) | REAL league drafts | **never written by practice drafts** — reports the parent league's unstarted draft, all slots playerId -1. Filter unmade picks NUMERICALLY (`Number(playerId) > 0`); the sentinel is -1 and a string compare against '0' admits it |
-| Pick History tab scrape (v0.8.0) | MOCK drafts — refresh/outage recovery | rows exist only while the tab is open (the pill asks the user to open it); players resolved by headshot id (`/full/<id>.png`) or board-name match; deliberately NOT persisted — a stored history from mock A would poison mock B |
+| Pick History tab scrape (v0.8.0, row shape captured live v0.8.1) | MOCK drafts — refresh/outage recovery | rows exist only while the tab is open (the pill asks the user to open it). REAL shape: plain tables per round, each under a repeated PICK/PLAYER/TEAM header, rows labelled with bare OVERALL pick integers (continuing across rounds) — NOT "1.04" labels (which is why the sticky sampler never fired). Recognition is header-anchored (the player list also leads rows with an integer but has no TEAM column); players resolved by headshot id (`/full/<id>.png`) or exact board-name text node; deliberately NOT persisted — a stored history from mock A would poison mock B |
 | DOM header cross-check ("ON THE CLOCK: PICK N") | gap detection | detection only, never a data source |
 
 Mid-draft strategy that follows from the table: persistence covers
@@ -76,11 +76,18 @@ seating + roster-aware run model engaged (audit panel showed the room
 model, snake math agreed with ESPN's own header: pick #23 = round 3 pick
 7 in an 8-team room).
 
+Verified live (league 1569859610, LM-paused test draft, 2026-08-23,
+v0.8.2): the full missed-pick recovery chain — tap joined after pick 2,
+Pick History scrape recovered every missed pick with correct overall
+numbers, `domTeams` corrected a mis-observed team count (see the
+truncated-snake illusion below), TEAM-column names seated the two teams
+whose only picks were missed, and the round model re-engaged
+(`seated:true gap:0`). Breadcrumbs (`data-ffa-hist`/`data-ffa-apply` on
+`<html>`) made the diagnosis and remain in place.
+
 Pending live verification:
-1. Mid-draft refresh persistence (v0.5.6) — join a mock, 5+ picks,
-   refresh, roster/pool must survive.
-2. The v0.6.0 completion-plan engine in any live room (both platforms).
-3. `mDraftDetail` backfill against the REAL September league (cannot be
+1. The v0.6.0 completion-plan engine in any live room (both platforms).
+2. `mDraftDetail` backfill against the REAL September league (cannot be
    tested before a real draft exists).
 
 ## Landmines — violating these bricks the ESPN app or the extension
@@ -104,6 +111,18 @@ Pending live verification:
 - Corporate networks can block the draft WebSocket; ESPN also rejects
   JOIN when a stale draft session is open elsewhere (`connect @ draft.js`
   failures with the extension disabled proved this is ESPN-side, not us).
+- A truncated snake feed can IMPERSONATE a smaller league perfectly: a
+  tap that misses the head of round 1 sees a shorter sequence that is
+  itself a flawless snake for fewer teams (live capture: 8-team draft
+  minus picks 1-2 read as an immaculate 6-team pattern). Never let
+  arrival-order observation outrank a source with real pick numbers
+  (league API, history scrape) — pre-v0.8.2 code lost four REAL picks
+  to this illusion before the phantom guard learned that history
+  entries are undroppable.
+- The draft page's leave-guard blocks programmatic `location.reload()`
+  silently — a "refresh the tab" instruction must be done by the human
+  (F5 + confirm), or the old content script keeps running while looking
+  perfectly alive.
 - A `WebSocket connection failed: construct @ inject-espn.js:45` stack is
   ATTRIBUTION, not causation — Chrome blames the construction site. The
   SSE fallback failing identically proves it isn't the tap.
@@ -117,6 +136,12 @@ picking the wrong one burned four round-trips in a live draft. Exports
 version, `espnDraft`, `espnBackfillInfo` (incl. the unmade-pick
 sentinel), `espnCmdWords` (protocol census), STATE/INIT frames, both
 frame rings, and `espnDomSample`/`espnHistorySample` (DOM shape samples).
+
+Live breadcrumbs: the recovery pipeline stamps its counters onto
+`<html>` — `data-ffa-hist` (scrape: rows/parsed/picks/domTeams) and
+`data-ffa-apply` (merge: live/backfill/dom/merged/order/teams/seated/
+gap) — readable from ANY page console or automation, which is what made
+the 6-teams-illusion diagnosable in a live room. Keep them.
 
 ## Test suites (run all: `for t in extension/*-test.js; do node $t; done`)
 

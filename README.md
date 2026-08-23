@@ -6,6 +6,20 @@ Inspired by [rosteraudit.com](https://rosteraudit.com) — but you control the d
 
 ---
 
+## ⭐ Draft Assistant (Chrome extension) — start here
+
+The most active part of this repo: a Chrome MV3 extension that turns
+**Sleeper and ESPN draft rooms** into an advised draft board. It injects
+live value badges into the site's own player list, keeps a roster-aware
+pick bar on screen (with cost-of-waiting and positional-run warnings),
+and explains every recommendation in a tabbed audit panel.
+
+No build step — install takes two minutes:
+**[extension/README.md](extension/README.md)** has the install steps and
+a full write-up of how the recommendation engine works.
+
+---
+
 ## Requirements
 
 - Python 3.11+ (managed via pyenv recommended)

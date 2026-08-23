@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Dynasty Advisor \u2014 Draft Assistant",
-  "version": "0.8.0",
+  "version": "0.8.3",
   "description": "Live draft board for Sleeper and ESPN drafts: multi-source values, tier breaks, roster needs, and falling-value alerts.",
   "permissions": [
     "sidePanel",
