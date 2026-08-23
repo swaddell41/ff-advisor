@@ -29,17 +29,28 @@ enter your Sleeper username.
 - **Badges** in each player row (placed inside the position/team meta line
   so names never truncate): `1.8k T3 ↑11` = our value, positional tier,
   and falling-value delta vs. current pick. Green = value falling to you.
-- **★ PICK strip** (bottom-left): top-3 recommendations for YOUR roster,
-  live roster counts, picks left, phase, plus inline warnings:
-  `−1.3k if you wait` (cost of waiting on the top pick) and
-  `⚠ RB run risk: could fall to Tony Pollard 1.3k` (worst case on a
-  position you're deferring).
-- **"why?"** link on the strip: opens the audit panel — roster and open
-  slots, your next pick number, a per-position table (best now → expected
-  at your next pick → if a run → value that vanishes), the score breakdown
-  for the top 3, and every rule currently in effect.
-- **Status pill** (bottom-left): board/matching health. Click for the
-  legend sidebar.
+- **Footer bar** (bottom-left, scoreboard-graphite styling from the
+  claude.ai/design "Draft Advisor Panel" project, direction 4a): amber
+  `★ BOWERS 6.1k TE` block, `−2.5k if you wait` (cost of waiting on the
+  top pick), `⚠ QB run risk`, the next-best two, picks left / K-DST
+  reserve, and the `why?` panel toggle.
+- **"why?"** opens the tabbed audit panel above the bar:
+  **VERDICT** (the pick as a hero card — value over the positional line,
+  wait cost, need multiplier, and what the runner-up lineups finish at),
+  **WAIT COST** (per-position: best now → expected at your next pick →
+  if a run → value that vanishes, plus every rule in effect), and
+  **UNTIL #n** (a timeline of the room model's expected take at every
+  pick before your next turn, your roster grid, and board health).
+- **Warning pill** (bottom-left): hidden while everything is healthy;
+  appears only for real problems (board fetch failed, no names matched,
+  or — on ESPN — `⚠ N picks missed — open the Pick History tab to
+  recover`, which heals the state via a DOM scrape of ESPN's own pick
+  record; mocks have no API history to recover from).
+- **`⟳ UPDATING…`** on the bar (Sleeper): the site removes a drafted
+  player's row instantly while the public API lags a beat — when the top
+  pick's row vanishes the bar says it's updating instead of advertising
+  a possibly-taken player, and polls immediately (600ms mutation-driven
+  cadence otherwise).
 
 ## How the recommendation engine works (annotate.js)
 

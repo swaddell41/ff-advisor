@@ -53,15 +53,19 @@ Hard-won parser facts (`content-espn.js`):
 | `chrome.storage` persistence | refresh/reload mid-draft | only what the tap saw (12h TTL, per-league) |
 | `lm-api-reads...?view=mSettings` | real leagues + practice drafts | via background proxy, creds; gives lineup slots, size, rounds |
 | `lm-api-reads...?view=mDraftDetail` (20s poll) | REAL league drafts | **never written by practice drafts** — reports the parent league's unstarted draft, all slots playerId -1. Filter unmade picks NUMERICALLY (`Number(playerId) > 0`); the sentinel is -1 and a string compare against '0' admits it |
+| Pick History tab scrape (v0.8.0) | MOCK drafts — refresh/outage recovery | rows exist only while the tab is open (the pill asks the user to open it); players resolved by headshot id (`/full/<id>.png`) or board-name match; deliberately NOT persisted — a stored history from mock A would poison mock B |
 | DOM header cross-check ("ON THE CLOCK: PICK N") | gap detection | detection only, never a data source |
 
 Mid-draft strategy that follows from the table: persistence covers
 reloads; the draftDetail poll recovers outage-missed picks in a REAL
-league; in a mock, missed picks are **detected but not recoverable**
-(`state.espnGap` → pill warning → seating guard refuses → engine
-degrades to the value-order model instead of running a confidently-wrong
-room model). League size is observed from the running draft itself on
-both platforms (`observedTeamCount`) and outranks settings.
+league; in a mock, `state.espnGap` → pill asks the user to open the Pick
+History tab → `scrapeEspnHistory` reads it, `applyEspn` re-merges
+(backfill → history → live, with live duplicates filling team ids into
+history entries, and remaining null teams attributed positionally via
+snake math), the gap heals and the seating guard re-engages. Until the
+tab is opened the engine degrades to the value-order model as before.
+League size is observed from the running draft itself on both platforms
+(`observedTeamCount`) and outranks settings.
 
 ## Verified live vs pending
 
@@ -120,7 +124,8 @@ frame rings, and `espnDomSample`/`espnHistorySample` (DOM shape samples).
 |---|---|
 | `parser-test.js` | ESPN frame parsing, replayed against captured bytes |
 | `teams-test.js` | league-size observation, both platforms' key shapes |
-| `backfill-test.js` | draftDetail merge + unmade-pick sentinel (19 asserts) |
+| `backfill-test.js` | three-source merge (draftDetail + history scrape + live), unmade-pick sentinel, positional team attribution |
+| `espn-history-test.js` | Pick History row recognition + player resolution (lifted verbatim from the source) |
 | `hydrate-test.js` | pick persistence across a session boundary |
 | `gap-test.js` | missed-pick detection, seating refusal on gaps |
 | `rowscan-test.js` | badge reconciliation incl. Sleeper multi-player rows |
@@ -143,10 +148,13 @@ python index-splicing; sweep for control characters after writing.
 ## Deliberately closed / parked
 
 - **STATE/INIT parsing** — INIT is opaque binary; superseded by
-  persistence + draftDetail. Do not reopen without a compelling reason.
-- **Pick History DOM scraping** — would recover outage picks in mocks
-  (the one uncovered case). Sticky sampler (`espnHistorySample`) is in
-  place if ever needed; parked as a testing-only inconvenience.
+  persistence + draftDetail + the Pick History scrape. Do not reopen
+  without a compelling reason.
+- ~~**Pick History DOM scraping**~~ — UNPARKED and shipped in v0.8.0
+  after refresh-missed picks wrecked a live mock: `scrapeEspnHistory` in
+  annotate.js, guarded by `espn-history-test.js` + the extended
+  `backfill-test.js`. The sticky sampler (`espnHistorySample`) remains
+  for diagnosing rows the parser fails on.
 - **Badge meta-line anchor (original task 4)** — the brief's condition
   ("if the fallback looks bad") is unmet; inline badges render cleanly.
 - **ADP-based opponent model** — measured, not worth it: the engine
@@ -161,7 +169,9 @@ python index-splicing; sweep for control characters after writing.
    pill and `ESPN · league <id>` in the side panel.
 3. Be connected from pick 1 (seating derives from a complete round 1;
    the draftDetail poll is the backstop in the real league).
-4. Watch the pill: `⚠ N picks missed` means the run model is off and
+4. The pill only appears when something is wrong. `⚠ N picks missed —
+   open the Pick History tab to recover` means exactly that: open the
+   tab once and the scrape rebuilds the missing picks; until then
    recommendations are value-order only — still correct players, less
    room awareness.
 5. If anything looks wrong: side panel → copy diagnostics → save it.
