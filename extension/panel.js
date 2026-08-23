@@ -310,8 +310,6 @@ async function connectEspnSim(nPicks) {
 
 // ── Rendering ───────────────────────────────────────────────────────────────
 
-const POS_TARGETS = { QB: 2, RB: 5, WR: 5, TE: 2 };
-
 function currentPickNumber() {
   if (state.platform === 'espn') return (state.espn ? state.espn.picks.length : 0) + 1;
   return state.picks.length + 1;
@@ -361,10 +359,11 @@ function renderMyRoster() {
     })
     .join('');
 
-  const needs = Object.entries(POS_TARGETS)
-    .filter(([pos, target]) => (counts[pos] || 0) < target)
-    .map(([pos, target]) => `${pos} ${counts[pos] || 0}/${target}`);
-  $('needs').textContent = needs.length ? `· thin: ${needs.join(', ')}` : '· roster balanced';
+  // Plain counts, no invented targets — the panel doesn't know this
+  // league's lineup, and "QB 0/2" against a 1QB league was a lie. The
+  // roster-aware needs live in the on-page audit panel.
+  $('needs').textContent =
+    '· ' + ['QB', 'RB', 'WR', 'TE'].map((pos) => `${counts[pos] || 0} ${pos}`).join(' · ');
 }
 
 function renderBoard() {
@@ -385,7 +384,7 @@ function renderBoard() {
     }
     const delta = currentPick - p.overall_rank;
     const steal = anyPicks && delta >= 6
-      ? `<span class="steal" title="Ranked #${p.overall_rank} overall, still available at pick ${currentPick}">+${delta}</span>`
+      ? `<span class="steal" title="Ranked #${p.overall_rank} overall, still available at pick ${currentPick}">↑${delta}</span>`
       : '';
     const inj = p.injury_status
       ? `<span class="inj" title="${p.injury_status}">${p.injury_status[0]}</span>`

@@ -53,7 +53,7 @@ Hard-won parser facts (`content-espn.js`):
 | `chrome.storage` persistence | refresh/reload mid-draft | only what the tap saw (12h TTL, per-league) |
 | `lm-api-reads...?view=mSettings` | real leagues + practice drafts | via background proxy, creds; gives lineup slots, size, rounds |
 | `lm-api-reads...?view=mDraftDetail` (20s poll) | REAL league drafts | **never written by practice drafts** — reports the parent league's unstarted draft, all slots playerId -1. Filter unmade picks NUMERICALLY (`Number(playerId) > 0`); the sentinel is -1 and a string compare against '0' admits it |
-| Pick History tab scrape (v0.8.0) | MOCK drafts — refresh/outage recovery | rows exist only while the tab is open (the pill asks the user to open it); players resolved by headshot id (`/full/<id>.png`) or board-name match; deliberately NOT persisted — a stored history from mock A would poison mock B |
+| Pick History tab scrape (v0.8.0, row shape captured live v0.8.1) | MOCK drafts — refresh/outage recovery | rows exist only while the tab is open (the pill asks the user to open it). REAL shape: plain tables per round, each under a repeated PICK/PLAYER/TEAM header, rows labelled with bare OVERALL pick integers (continuing across rounds) — NOT "1.04" labels (which is why the sticky sampler never fired). Recognition is header-anchored (the player list also leads rows with an integer but has no TEAM column); players resolved by headshot id (`/full/<id>.png`) or exact board-name text node; deliberately NOT persisted — a stored history from mock A would poison mock B |
 | DOM header cross-check ("ON THE CLOCK: PICK N") | gap detection | detection only, never a data source |
 
 Mid-draft strategy that follows from the table: persistence covers
