@@ -300,6 +300,7 @@
         const byPick = new Map(a.timeline.map((t) => [t.pick, t.pos]));
         const cells = [];
         for (let pn = a.pick; pn <= a.la.next; pn++) {
+          if (pn !== a.pick && pn !== a.la.next && pickMade(pn)) continue; // locked slot — no live pick here
           let bar; let label; let labelColor; let extra = '';
           if (pn === a.pick) {
             bar = UI.amber; label = `${pn} you`; labelColor = UI.amberText;
@@ -459,6 +460,7 @@
     myCounts: null,      // {QB: n, RB: n, ...} — my roster so far (null = unknown)
     myUserId: null,      // sleeper user id (from stored username)
     currentPick: 1,
+    madePickNos: null,   // Set of overall pick numbers already filled (keepers land in FUTURE rounds)
     format: 'sf_ppr',
     mode: 'redraft',
     mySlot: null,        // my draft slot (1-based) — enables lookahead
@@ -1002,7 +1004,17 @@
                Date.now() - state.updatingSince > 5000)) {
             state.updatingPid = null;
           }
-          setCurrentPick((picks || []).length + 1);
+          // Keeper/traded picks arrive PRE-MADE in future rounds, so
+          // picks.length overshoots the live pick (a room with five locked
+          // keepers showed "pick 21" while round 1 was still running). The
+          // clock is on the lowest pick number nobody has filled yet.
+          const made = new Set(
+            (picks || []).map((p) => Number(p.pick_no)).filter((n) => n > 0)
+          );
+          state.madePickNos = made;
+          let cur = 1;
+          while (made.has(cur)) cur += 1;
+          setCurrentPick(cur);
           recommend();
         } catch (_) {}
       };
@@ -1707,6 +1719,13 @@
     return state.draftType === 'snake' && rnd % 2 === 1 ? t - idx : idx + 1;
   }
 
+  // A pick number already filled ahead of the clock (keeper/locked/traded
+  // slot). Its player is off the board TODAY — it must never count as a
+  // future removal, an intervening room take, or one of my turns.
+  function pickMade(pn) {
+    return !!(state.madePickNos && state.madePickNos.has(pn));
+  }
+
   // Returns {next, removals}: my next pick number and how many players the
   // room takes off the board before it. null if my slot is unknown.
   function nextMyPickInfo() {
@@ -1714,6 +1733,7 @@
     const last = (state.lineup.rounds || 15) * state.lineup.teams;
     let removals = 0;
     for (let pn = state.currentPick; pn <= last; pn++) {
+      if (pickMade(pn)) continue; // keeper/locked — already off the board
       if (pickSlot(pn) === state.mySlot) {
         if (pn === state.currentPick) continue; // that's THIS pick
         return { next: pn, removals };
@@ -1770,6 +1790,7 @@
   function interveningSlots(la) {
     const slots = [];
     for (let pn = state.currentPick; pn < la.next; pn++) {
+      if (pickMade(pn)) continue; // keeper/locked — nobody new picks here
       const s = pickSlot(pn);
       if (s === state.mySlot) continue; // my own current pick
       slots.push(s);
@@ -1789,6 +1810,7 @@
     const gone = new Set();
     const takes = []; // {pick, pos} per intervening pick — the audit timeline
     for (let pn = state.currentPick; pn < la.next; pn++) {
+      if (pickMade(pn)) continue; // keeper/locked — its player is already gone
       const s = pickSlot(pn);
       if (s === state.mySlot) continue; // my own current pick
       const c = counts(s);
@@ -1976,6 +1998,7 @@
       const myPicks = [];
       const horizon = (L.rounds || 15) * L.teams;
       for (let pn = state.currentPick + 1; pn <= horizon && myPicks.length < 8; pn++) {
+        if (pickMade(pn)) continue; // a kept slot isn't a turn I get
         if (pickSlot(pn) === state.mySlot) myPicks.push(pn);
       }
       const planValue = (cand) => {
@@ -1994,6 +2017,7 @@
         let total = cand.p.value;
         const last = myPicks[myPicks.length - 1];
         for (let pn = state.currentPick + 1; pn <= last; pn++) {
+          if (pickMade(pn)) continue; // keeper/locked — already off the board
           const slot = pickSlot(pn);
           if (slot === state.mySlot) {
             const cnt = (x) => counts[x] || 0;

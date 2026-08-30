@@ -2,7 +2,9 @@
 // driven with BOTH platforms' data shapes. Sleeper is the reference
 // implementation, so its cases are regression tests first and foremost.
 const fs = require('fs');
-const src = fs.readFileSync('C:/Users/Sam/ff-advisor/extension/annotate.js', 'utf8');
+const path = require('path');
+const dir = path.dirname(__filename);
+const src = fs.readFileSync(path.join(dir, 'annotate.js'), 'utf8');
 const body = src.slice(src.indexOf('function observedTeamCount'), src.indexOf('// ── Draft context'));
 const state = { lineup: { teams: 10 } };
 const { observedTeamCount, applyTeamCount } = new Function('state', 'computeReplacement',

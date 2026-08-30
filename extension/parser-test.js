@@ -1,7 +1,9 @@
 // Replays the exact frames captured live (league 1356040896) through the
 // rewritten parser, asserting against the snake order reconstructed from them.
 const fs = require('fs');
-const src = fs.readFileSync('C:/Users/Sam/ff-advisor/extension/content-espn.js', 'utf8');
+const path = require('path');
+const dir = path.dirname(__filename);
+const src = fs.readFileSync(path.join(dir, 'content-espn.js'), 'utf8');
 
 // Lift parseFrame + recordPick out of the IIFE so we can drive them directly.
 const picks = [], seen = new Set();

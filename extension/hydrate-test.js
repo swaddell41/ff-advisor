@@ -1,7 +1,9 @@
 // Rehydration across a mid-draft refresh. Drives the real content-espn.js
 // with a faked chrome.storage + CustomEvent surface.
 const fs = require('fs');
-const SRC = fs.readFileSync('C:/Users/Sam/ff-advisor/extension/content-espn.js', 'utf8');
+const path = require('path');
+const dir = path.dirname(__filename);
+const SRC = fs.readFileSync(path.join(dir, 'content-espn.js'), 'utf8');
 
 function runSession({ leagueId, stored, frames, storedAgeMs = 0 }) {
   let saved = null;

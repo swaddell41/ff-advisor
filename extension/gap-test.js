@@ -1,7 +1,9 @@
 // Missed-pick detection: the case where an outage forces a refresh and
 // picks happen while nothing is listening.
 const fs = require('fs');
-const src = fs.readFileSync('C:/Users/Sam/ff-advisor/extension/annotate.js', 'utf8');
+const path = require('path');
+const dir = path.dirname(__filename);
+const src = fs.readFileSync(path.join(dir, 'annotate.js'), 'utf8');
 // Lift the live regex out of the source so the test cannot drift from it.
 const RE = eval(src.match(/const m = t\.match\((\/.+?\/i)\);/)[1]);
 const readPick = (text) => { const m = String(text).match(RE);

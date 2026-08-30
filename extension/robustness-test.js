@@ -4,7 +4,9 @@
 // biased environment — the gap to the best forced line measures the
 // misprediction cost the engine could not route around.
 const fs = require('fs');
-let SRC = fs.readFileSync('C:/Users/Sam/ff-advisor/extension/annotate.js', 'utf8');
+const path = require('path');
+const dir = path.dirname(__filename);
+let SRC = fs.readFileSync(path.join(dir, 'annotate.js'), 'utf8');
 SRC = SRC.slice(0, SRC.indexOf('// ── Boot')) +
   '\n__export({ state, recommend, computeReplacement, setCurrentPick });\n})();';
 const board = JSON.parse(fs.readFileSync(require('path').join(__dirname, 'board-fixture.json'), 'utf8'));
