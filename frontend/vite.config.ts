@@ -13,6 +13,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    fs: {
+      // The draft companion bundles extension/annotate.js verbatim (?raw
+      // import) — allow the dev server to read outside frontend/.
+      allow: ['..'],
+    },
     proxy: {
       // Forward /api/* requests to the FastAPI backend during development
       '/api': {
