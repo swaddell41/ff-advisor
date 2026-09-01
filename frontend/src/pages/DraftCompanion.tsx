@@ -314,7 +314,8 @@ export default function DraftCompanion() {
 
   const copyQueue = async () => {
     if (!plan) return
-    const text = plan.queue.map((q, i) => `${i + 1}. ${q.name} (${q.pos})`).join('\n')
+    const all = [...plan.net, ...plan.queue]
+    const text = all.map((q, i) => `${i + 1}. ${q.name} (${q.pos})`).join('\n')
     try {
       await navigator.clipboard.writeText(text)
       setCopied(true)
@@ -582,15 +583,33 @@ export default function DraftCompanion() {
               </div>
               <div className="border-t border-border pt-2 space-y-1">
                 <div className="flex items-center justify-between">
-                  <div className="text-xs uppercase tracking-wider text-muted-foreground">Queue order ({plan.queue.length})</div>
+                  <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                    Queue order ({plan.net.length + plan.queue.length})
+                  </div>
                   <button onClick={copyQueue} className="text-xs underline underline-offset-2">
                     {copied ? 'copied ✓' : 'copy list'}
                   </button>
                 </div>
+                {plan.net.length > 0 && (
+                  <>
+                    <div className="text-xs text-amber-400">
+                      Faller net — these should be gone before your turn. Queued on top they do
+                      nothing… unless one falls, and then autopick takes the steal instead of the script.
+                    </div>
+                    <ol className="text-sm space-y-0.5">
+                      {plan.net.map((q, i) => (
+                        <li key={`net|${q.name}|${q.pos}`} className="flex gap-2 text-amber-400/90">
+                          <span className="tabular-nums w-5 text-right opacity-70">{i + 1}.</span>
+                          <span>{q.name} <span className="text-xs opacity-70">{q.pos}</span></span>
+                        </li>
+                      ))}
+                    </ol>
+                  </>
+                )}
                 <ol className="text-sm space-y-0.5">
                   {plan.queue.map((q, i) => (
                     <li key={`${q.name}|${q.pos}`} className="flex gap-2">
-                      <span className="text-muted-foreground tabular-nums w-5 text-right">{i + 1}.</span>
+                      <span className="text-muted-foreground tabular-nums w-5 text-right">{plan.net.length + i + 1}.</span>
                       <span>{q.name} <span className="text-muted-foreground text-xs">{q.pos}</span></span>
                     </li>
                   ))}

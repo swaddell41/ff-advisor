@@ -21,6 +21,15 @@ export interface PlanPick {
 export interface DraftPlan {
   picks: PlanPick[]
   queue: { name: string; pos: string; value: number }[]
+  /**
+   * Faller net: players the room model expects to be TAKEN before my first
+   * pick, that I could start, valued above my planned star. Queued ABOVE the
+   * script they are inert when the draft goes as expected (already gone, so
+   * autopick skips them) — but if one is still on the board at my turn, he
+   * fell, and queue-first autopick correctly grabs the steal instead of the
+   * scripted pick.
+   */
+  net: { name: string; pos: string; value: number }[]
 }
 
 // Same starters-first rule the engine assumes of opponents (teamCanStart).
@@ -46,7 +55,7 @@ function teamCanStart(L: any, c: Record<string, number>, pos: string): boolean {
 export function simulatePlan(eng: DraftEngine, myTurns = 8, queueSize = 24): DraftPlan {
   const st = eng.state
   const L = st.lineup
-  if (!st.mySlot || !L?.teams) return { picks: [], queue: [] }
+  if (!st.mySlot || !L?.teams) return { picks: [], queue: [], net: [] }
 
   const snake = st.draftType === 'snake'
   const horizon = (L.rounds || 15) * L.teams
@@ -56,6 +65,24 @@ export function simulatePlan(eng: DraftEngine, myTurns = 8, queueSize = 24): Dra
   for (const k in (st.slotCounts || {})) roomC[k] = { ...st.slotCounts[k] }
   const counts: Record<string, number> = { ...(st.myCounts || {}) }
   const startPick = st.currentPick
+
+  // My starters-first gate (mirrors the engine's canStart, TE flex rule
+  // included), evaluated against my roster as it stands NOW — the net only
+  // guards my first upcoming pick.
+  const teFilled = (counts.TE || 0) >= L.te
+  const myDed: Record<string, number> = {
+    QB: Math.max(0, (L.qb + L.sf) - (counts.QB || 0)),
+    RB: Math.max(0, L.rb - (counts.RB || 0)),
+    WR: Math.max(0, L.wr - (counts.WR || 0)),
+    TE: Math.max(0, L.te - (counts.TE || 0)),
+  }
+  const myFlexUsed = Math.max(0, (counts.RB || 0) - L.rb) +
+    Math.max(0, (counts.WR || 0) - L.wr) + Math.max(0, (counts.TE || 0) - L.te)
+  const myFlexOpen = Math.max(0, L.flex - myFlexUsed)
+  const myCanStart = (pos: string) =>
+    (myDed[pos] || 0) > 0 ||
+    (myFlexOpen > 0 && (pos === 'RB' || pos === 'WR' || (pos === 'TE' && !teFilled)))
+  const preTakes: { name: string; pos: string; value: number }[] = []
 
   const avail = () => st.allPlayers.filter((p: any) => !picked.has(String(p.player_id)))
 
@@ -86,6 +113,9 @@ export function simulatePlan(eng: DraftEngine, myTurns = 8, queueSize = 24): Dra
       if (!take) break
       picked.add(String(take.player_id))
       c[take.position] = (c[take.position] || 0) + 1
+      if (picks.length === 0) {
+        preTakes.push({ name: take.name, pos: take.position, value: take.value })
+      }
     }
   }
 
@@ -101,5 +131,14 @@ export function simulatePlan(eng: DraftEngine, myTurns = 8, queueSize = 24): Dra
     }
     if (queue.length >= queueSize) break
   }
-  return { picks, queue }
+
+  // Only takes that outvalue my planned star belong in the net — anything
+  // below it must never jump the script.
+  const starValue = picks[0]?.top[0]?.value ?? Infinity
+  const net = preTakes
+    .filter((t) => myCanStart(t.pos) && t.value > starValue)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 12)
+
+  return { picks, queue, net }
 }
