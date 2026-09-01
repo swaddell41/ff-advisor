@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createDraftEngine, pickSlot, type DraftEngine } from '@/lib/draftEngine'
+import { simulatePlan, type DraftPlan } from '@/lib/draftPlan'
 import { cn } from '@/lib/utils'
 
 /**
@@ -73,6 +74,9 @@ export default function DraftCompanion() {
   const [snap, setSnap] = useState<Snapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [plan, setPlan] = useState<DraftPlan | null>(null)
+  const [planBusy, setPlanBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   const engineRef = useRef<DraftEngine | null>(null)
   const metaRef = useRef<Map<string, SleeperDraft>>(new Map())
@@ -296,6 +300,28 @@ export default function DraftCompanion() {
     return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onVis) }
   }, [active, platform, tick])
 
+  // Fresh live state → simulate forward → restore live state.
+  const generatePlan = async () => {
+    setPlanBusy(true)
+    try {
+      await tick()
+      setPlan(simulatePlan(engine()))
+      await tick()
+    } catch (e: any) {
+      setError(e.message || String(e))
+    } finally { setPlanBusy(false) }
+  }
+
+  const copyQueue = async () => {
+    if (!plan) return
+    const text = plan.queue.map((q, i) => `${i + 1}. ${q.name} (${q.pos})`).join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch { /* clipboard unavailable */ }
+  }
+
   const reset = () => {
     setDraftId(null); setDrafts(null); setEspnTeams(null); setEspnTeamId(null)
     setSnap(null); setError(null)
@@ -517,6 +543,66 @@ export default function DraftCompanion() {
             <span className="rounded-full border border-border px-2.5 py-1 text-muted-foreground">
               {a.roster.remaining} picks left{a.roster.reserve ? ` · save ${a.roster.reserve} K/DST` : ''}
             </span>
+          )}
+        </div>
+      )}
+
+      {snap && snap.mySlot != null && (
+        <div className="rounded-lg border border-border p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm font-medium">Autopilot queue</div>
+              <div className="text-xs text-muted-foreground">
+                Can't be there? Simulate your next picks and load the queue into the {platform === 'espn' ? 'ESPN' : 'Sleeper'} app —
+                its autopick drafts from your queue, top-down, until you arrive.
+              </div>
+            </div>
+            <button
+              onClick={generatePlan}
+              disabled={planBusy}
+              className="shrink-0 rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+            >
+              {planBusy ? '…' : plan ? 'Regenerate' : 'Generate'}
+            </button>
+          </div>
+          {plan && plan.picks.length > 0 && (
+            <>
+              <div className="space-y-1.5">
+                {plan.picks.map((p) => (
+                  <div key={p.overall} className="text-sm">
+                    <span className="text-muted-foreground tabular-nums">Rd {p.round} · #{p.overall}</span>{' '}
+                    <span className="font-medium">★ {p.top[0].name} <span className="text-muted-foreground font-normal">{p.top[0].pos}</span></span>
+                    {p.top.length > 1 && (
+                      <span className="text-xs text-muted-foreground">
+                        {' '}· or {p.top.slice(1).map((t: any) => t.name).join(' / ')}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="border-t border-border pt-2 space-y-1">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs uppercase tracking-wider text-muted-foreground">Queue order ({plan.queue.length})</div>
+                  <button onClick={copyQueue} className="text-xs underline underline-offset-2">
+                    {copied ? 'copied ✓' : 'copy list'}
+                  </button>
+                </div>
+                <ol className="text-sm space-y-0.5">
+                  {plan.queue.map((q, i) => (
+                    <li key={`${q.name}|${q.pos}`} className="flex gap-2">
+                      <span className="text-muted-foreground tabular-nums w-5 text-right">{i + 1}.</span>
+                      <span>{q.name} <span className="text-muted-foreground text-xs">{q.pos}</span></span>
+                    </li>
+                  ))}
+                </ol>
+                <div className="text-xs text-muted-foreground pt-1">
+                  Snapshot of this moment — regenerate after picks happen, and re-order your in-app queue to match.
+                </div>
+              </div>
+            </>
+          )}
+          {plan && plan.picks.length === 0 && (
+            <div className="text-xs text-muted-foreground">Couldn't simulate — draft order may not be posted yet.</div>
           )}
         </div>
       )}
