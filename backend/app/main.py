@@ -23,6 +23,7 @@ from app.api.auth import router as auth_router
 from app.api.leagues import router as leagues_router
 from app.api.managers import router as managers_router
 from app.api.me import router as me_router
+from app.api.espn import router as espn_router
 from app.auth import SESSION_COOKIE, current_session_user, get_session_user  # noqa: E402
 from app.db import get_connection, init_schema  # noqa: E402
 
@@ -52,6 +53,7 @@ app.include_router(auth_router)
 app.include_router(leagues_router)
 app.include_router(managers_router)
 app.include_router(me_router)
+app.include_router(espn_router)
 
 
 @app.middleware("http")

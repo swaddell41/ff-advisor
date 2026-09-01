@@ -5,13 +5,21 @@ import { cn } from '@/lib/utils'
 /**
  * Mobile draft companion: the extension's side-panel recommendation, as a
  * phone-friendly page. Same engine file, same numbers — this page only
- * gathers the inputs (Sleeper's public draft API + our /api/draftboard) and
- * renders the audit the engine produces.
+ * gathers the inputs and renders the audit the engine produces.
+ *
+ * Two platforms, two data paths:
+ *  - Sleeper: public draft API, straight from the browser.
+ *  - ESPN: no public draft API — our backend proxies the league-read API
+ *    (mSettings + mDraftDetail, real leagues only) with the user's ESPN
+ *    cookies from env. Picks map to board players via the espn_id
+ *    crosswalk the draftboard already carries.
  */
 
 const SLEEPER = 'https://api.sleeper.app/v1'
-const POLL_MS = 30_000
 const STORE_KEY = 'ffa-draft-companion'
+const POLL_MS = { sleeper: 30_000, espn: 15_000 }
+
+type Platform = 'sleeper' | 'espn'
 
 interface SleeperDraft {
   draft_id: string
@@ -30,14 +38,19 @@ interface Snapshot {
   mySlot: number | null
   clockSlot: number
   draftName: string
+  unmatched: number
   syncedAt: number
 }
 
 const k = (v: number) => `${(v / 1000).toFixed(1)}k`
 
-async function sleeperJson(path: string) {
-  const r = await fetch(`${SLEEPER}${path}`)
-  if (!r.ok) throw new Error(`Sleeper ${path} → ${r.status}`)
+async function getJson(url: string) {
+  const r = await fetch(url)
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`
+    try { detail = (await r.json()).detail || detail } catch { /* not json */ }
+    throw new Error(detail)
+  }
   return r.json()
 }
 
@@ -45,10 +58,18 @@ export default function DraftCompanion() {
   const saved = (() => {
     try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}') } catch { return {} }
   })()
+  const [platform, setPlatform] = useState<Platform>(saved.platform || 'sleeper')
+  // Sleeper identity
   const [username, setUsername] = useState<string>(saved.username || '')
   const [userId, setUserId] = useState<string | null>(saved.userId || null)
   const [drafts, setDrafts] = useState<SleeperDraft[] | null>(null)
   const [draftId, setDraftId] = useState<string | null>(saved.draftId || null)
+  // ESPN identity
+  const [espnLeagueId, setEspnLeagueId] = useState<string>(saved.espnLeagueId || '')
+  const [espnSeason, setEspnSeason] = useState<string>(saved.espnSeason || String(new Date().getFullYear()))
+  const [espnTeams, setEspnTeams] = useState<{ id: number; name: string }[] | null>(null)
+  const [espnTeamId, setEspnTeamId] = useState<number | null>(saved.espnTeamId ?? null)
+
   const [snap, setSnap] = useState<Snapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -58,18 +79,58 @@ export default function DraftCompanion() {
   const boardRef = useRef<Map<string, any>>(new Map())
 
   const persist = (patch: Record<string, any>) => {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify({ username, userId, draftId, ...patch })) } catch { /* private mode */ }
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        platform, username, userId, draftId, espnLeagueId, espnSeason, espnTeamId, ...patch,
+      }))
+    } catch { /* private mode */ }
   }
 
+  const getBoard = async (format: string, mode: string) => {
+    const key = `${format}:${mode}`
+    let board = boardRef.current.get(key)
+    if (!board) {
+      board = await getJson(`/api/draftboard?format=${format}&mode=${mode}`)
+      boardRef.current.set(key, board)
+    }
+    return board
+  }
+
+  const engine = () => {
+    if (!engineRef.current) engineRef.current = createDraftEngine()
+    return engineRef.current
+  }
+
+  // Feed assembled draft state to the engine and publish the snapshot.
+  const publish = (st: Record<string, any>, draftName: string, unmatched: number) => {
+    const eng = engine()
+    Object.assign(eng.state, st)
+    eng.computeReplacement()
+    eng.recommend()
+    const cur = eng.state.currentPick
+    const clockSlot = pickSlot(cur, eng.state.lineup.teams, eng.state.draftType === 'snake')
+    setSnap({
+      audit: eng.state.audit,
+      lineup: eng.state.lineup,
+      onClock: eng.state.mySlot != null && clockSlot === eng.state.mySlot,
+      mySlot: eng.state.mySlot,
+      clockSlot,
+      draftName,
+      unmatched,
+      syncedAt: Date.now(),
+    })
+  }
+
+  // ── Sleeper path ─────────────────────────────────────────────────────
   const findDrafts = async () => {
     setBusy(true); setError(null)
     try {
-      const u = await sleeperJson(`/user/${encodeURIComponent(username.trim())}`)
+      const u = await getJson(`${SLEEPER}/user/${encodeURIComponent(username.trim())}`)
       if (!u?.user_id) throw new Error('user not found')
       setUserId(u.user_id)
       const year = new Date().getFullYear()
       const lists = await Promise.all([year, year - 1].map((y) =>
-        sleeperJson(`/user/${u.user_id}/drafts/nfl/${y}`).catch(() => [])))
+        getJson(`${SLEEPER}/user/${u.user_id}/drafts/nfl/${y}`).catch(() => [])))
       const all: SleeperDraft[] = ([] as SleeperDraft[]).concat(...lists)
         .filter((d) => d && d.draft_id)
         .sort((a: any, b: any) => (b.start_time || 0) - (a.start_time || 0))
@@ -81,144 +142,274 @@ export default function DraftCompanion() {
     } finally { setBusy(false) }
   }
 
-  const tick = useCallback(async () => {
+  const sleeperTick = useCallback(async () => {
     if (!draftId || !userId) return
-    setError(null)
-    try {
-      let meta = metaRef.current.get(draftId)
-      if (!meta || meta.status !== 'complete') {
-        meta = (await sleeperJson(`/draft/${draftId}`)) as SleeperDraft
-        metaRef.current.set(draftId, meta)
+    let meta = metaRef.current.get(draftId)
+    if (!meta || meta.status !== 'complete') {
+      meta = (await getJson(`${SLEEPER}/draft/${draftId}`)) as SleeperDraft
+      metaRef.current.set(draftId, meta)
+    }
+    const picks: any[] = await getJson(`${SLEEPER}/draft/${draftId}/picks`)
+
+    const s: any = meta.settings || {}
+    const scoring = String(meta.metadata?.scoring_type || '')
+    const format = (s.slots_super_flex || 0) > 0 || scoring.includes('2qb') ? 'sf_ppr' : '1qb_ppr'
+    const mode = scoring.includes('dynasty') ? 'dynasty' : 'redraft'
+    const board = await getBoard(format, mode)
+
+    // Mirror of the extension's Sleeper boot + pollPicks state assembly.
+    const slotCounts: Record<string, Record<string, number>> = {}
+    const counts: Record<string, number> = {}
+    let qbRound: number | null = null
+    const made = new Set<number>()
+    for (const p of picks) {
+      const n = Number(p.pick_no)
+      if (n > 0) made.add(n)
+      const pos = (p.metadata && p.metadata.position) || '?'
+      if (p.draft_slot) {
+        ;(slotCounts[p.draft_slot] = slotCounts[p.draft_slot] || {})[pos] =
+          (slotCounts[p.draft_slot][pos] || 0) + 1
       }
-      const picks: any[] = await sleeperJson(`/draft/${draftId}/picks`)
-
-      const s: any = meta.settings || {}
-      const scoring = String(meta.metadata?.scoring_type || '')
-      const format = (s.slots_super_flex || 0) > 0 || scoring.includes('2qb') ? 'sf_ppr' : '1qb_ppr'
-      const mode = scoring.includes('dynasty') ? 'dynasty' : 'redraft'
-      const boardKey = `${format}:${mode}`
-      let board = boardRef.current.get(boardKey)
-      if (!board) {
-        const r = await fetch(`/api/draftboard?format=${format}&mode=${mode}`)
-        if (!r.ok) throw new Error(`draftboard → ${r.status}`)
-        board = await r.json()
-        boardRef.current.set(boardKey, board)
+      if (String(p.picked_by) === String(userId)) {
+        counts[pos] = (counts[pos] || 0) + 1
+        if (pos === 'QB' && qbRound === null) qbRound = Math.ceil((p.pick_no || 1) / (s.teams || 10))
       }
+    }
+    let cur = 1
+    while (made.has(cur)) cur += 1
 
-      if (!engineRef.current) engineRef.current = createDraftEngine()
-      const eng = engineRef.current
-      const st = eng.state
-
-      // Mirror of the extension's Sleeper boot + pollPicks state assembly.
-      st.format = format
-      st.mode = mode
-      st.draftType = meta.type || 'snake'
-      st.lineup = {
+    publish({
+      format, mode,
+      draftType: meta.type || 'snake',
+      lineup: {
         teams: s.teams || 10,
         qb: s.slots_qb ?? 1, rb: s.slots_rb ?? 2, wr: s.slots_wr ?? 2, te: s.slots_te ?? 1,
         flex: (s.slots_flex ?? 1) + (s.slots_wr_rb ?? 0) + (s.slots_wr_rb_te ?? 0),
         sf: s.slots_super_flex ?? 0, k: s.slots_k ?? 0, dst: s.slots_def ?? 0,
         rounds: s.rounds ?? 15,
-      }
-      st.mySlot = (meta.draft_order && meta.draft_order[userId]) || null
-      st.myUserId = userId
-      st.allPlayers = board.players
-      st.badges = new Map()
-      st.pickedIds = new Set(picks.map((p) => String(p.player_id)))
-      const slotCounts: Record<string, Record<string, number>> = {}
-      const counts: Record<string, number> = {}
-      let qbRound: number | null = null
-      const made = new Set<number>()
-      for (const p of picks) {
-        const n = Number(p.pick_no)
-        if (n > 0) made.add(n)
-        const pos = (p.metadata && p.metadata.position) || '?'
-        if (p.draft_slot) {
-          ;(slotCounts[p.draft_slot] = slotCounts[p.draft_slot] || {})[pos] =
-            (slotCounts[p.draft_slot][pos] || 0) + 1
-        }
-        if (String(p.picked_by) === String(userId)) {
-          counts[pos] = (counts[pos] || 0) + 1
-          if (pos === 'QB' && qbRound === null) qbRound = Math.ceil((p.pick_no || 1) / (s.teams || 10))
-        }
-      }
-      st.slotCounts = slotCounts
-      st.myCounts = counts
-      st.myQBLate = qbRound !== null && qbRound >= 8
-      st.madePickNos = made
-      let cur = 1
-      while (made.has(cur)) cur += 1
-      st.currentPick = cur
+      },
+      mySlot: (meta.draft_order && meta.draft_order[userId]) || null,
+      myUserId: userId,
+      allPlayers: board.players,
+      badges: new Map(),
+      pickedIds: new Set(picks.map((p) => String(p.player_id))),
+      slotCounts,
+      myCounts: counts,
+      myQBLate: qbRound !== null && qbRound >= 8,
+      madePickNos: made,
+      currentPick: cur,
+    }, String(meta.metadata?.name || 'Draft'), 0)
+  }, [draftId, userId])
 
-      eng.computeReplacement()
-      eng.recommend()
+  // ── ESPN path ────────────────────────────────────────────────────────
+  const loadEspnLeague = async () => {
+    setBusy(true); setError(null)
+    try {
+      const d = await getJson(`/api/espn/draft/${espnLeagueId.trim()}?season=${espnSeason}`)
+      setEspnTeams(d.teams || [])
+      persist({ espnLeagueId: espnLeagueId.trim(), espnSeason })
+      if (!(d.teams || []).length) setError('League loaded but has no teams — check the league ID.')
+    } catch (e: any) {
+      setError(e.message || String(e))
+    } finally { setBusy(false) }
+  }
 
-      const clockSlot = pickSlot(cur, st.lineup.teams, st.draftType === 'snake')
-      setSnap({
-        audit: st.audit,
-        lineup: st.lineup,
-        onClock: st.mySlot != null && clockSlot === st.mySlot,
-        mySlot: st.mySlot,
-        clockSlot,
-        draftName: String(meta.metadata?.name || 'Draft'),
-        syncedAt: Date.now(),
-      })
+  const espnTick = useCallback(async () => {
+    if (!espnLeagueId || espnTeamId == null) return
+    const d = await getJson(`/api/espn/draft/${espnLeagueId}?season=${espnSeason}`)
+    const format = d.superflex ? 'sf_ppr' : '1qb_ppr'
+    const board = await getBoard(format, 'redraft')
+    const byEspn = new Map<number, any>()
+    for (const p of board.players) {
+      if (p.espn_id) byEspn.set(Number(p.espn_id), p)
+    }
+
+    // Draft slot per team: the league's pick order, or (fallback) the
+    // observed round-1 order once the draft is running.
+    const slotByTeam = new Map<number, number>()
+    ;(d.pick_order || []).forEach((tid: number, i: number) => slotByTeam.set(tid, i + 1))
+    if (!slotByTeam.size) {
+      for (const p of d.picks) {
+        if (p.overall <= d.lineup.teams) slotByTeam.set(p.team_id, p.overall)
+      }
+    }
+
+    const slotCounts: Record<string, Record<string, number>> = {}
+    const counts: Record<string, number> = {}
+    let qbRound: number | null = null
+    const made = new Set<number>()
+    const pickedIds = new Set<string>()
+    let unmatched = 0
+    for (const p of d.picks) {
+      made.add(p.overall)
+      const player = byEspn.get(Number(p.espn_id))
+      if (player) pickedIds.add(String(player.player_id))
+      else unmatched += 1
+      const pos = player?.position || '?'
+      const slot = slotByTeam.get(p.team_id)
+      if (slot) {
+        ;(slotCounts[slot] = slotCounts[slot] || {})[pos] = (slotCounts[slot][pos] || 0) + 1
+      }
+      if (p.team_id === espnTeamId) {
+        counts[pos] = (counts[pos] || 0) + 1
+        if (pos === 'QB' && qbRound === null) qbRound = Math.ceil(p.overall / (d.lineup.teams || 10))
+      }
+    }
+    let cur = 1
+    while (made.has(cur)) cur += 1
+
+    publish({
+      format, mode: 'redraft',
+      draftType: d.snake ? 'snake' : 'linear',
+      lineup: d.lineup,
+      mySlot: slotByTeam.get(espnTeamId) ?? null,
+      myUserId: null,
+      allPlayers: board.players,
+      badges: new Map(),
+      pickedIds,
+      slotCounts,
+      myCounts: counts,
+      myQBLate: qbRound !== null && qbRound >= 8,
+      madePickNos: made,
+      currentPick: cur,
+    }, d.name, unmatched)
+  }, [espnLeagueId, espnSeason, espnTeamId])
+
+  // ── Poll loop ────────────────────────────────────────────────────────
+  const active = platform === 'sleeper' ? Boolean(draftId && userId) : Boolean(espnLeagueId && espnTeamId != null)
+  const tick = useCallback(async () => {
+    setError(null)
+    try {
+      if (platform === 'sleeper') await sleeperTick()
+      else await espnTick()
     } catch (e: any) {
       setError(e.message || String(e))
     }
-  }, [draftId, userId])
+  }, [platform, sleeperTick, espnTick])
 
   useEffect(() => {
-    if (!draftId || !userId) return
+    if (!active) return
     tick()
-    const iv = setInterval(tick, POLL_MS)
+    const iv = setInterval(tick, POLL_MS[platform])
     const onVis = () => { if (document.visibilityState === 'visible') tick() }
     document.addEventListener('visibilitychange', onVis)
     return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onVis) }
-  }, [draftId, userId, tick])
+  }, [active, platform, tick])
+
+  const reset = () => {
+    setDraftId(null); setDrafts(null); setEspnTeams(null); setEspnTeamId(null)
+    setSnap(null); setError(null)
+    persist({ draftId: null, espnTeamId: null })
+  }
 
   // ── Setup screen ─────────────────────────────────────────────────────
-  if (!draftId || !userId) {
+  if (!active) {
     return (
       <div className="max-w-md mx-auto space-y-4">
         <h1 className="text-xl font-semibold">Draft Companion</h1>
         <p className="text-sm text-muted-foreground">
           Live pick recommendations from the same engine as the desktop draft assistant.
-          Enter your Sleeper username to find your drafts.
         </p>
-        <div className="flex gap-2">
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && username.trim()) findDrafts() }}
-            placeholder="Sleeper username"
-            className="flex-1 rounded-md border border-border bg-transparent px-3 py-2 text-sm"
-          />
-          <button
-            onClick={findDrafts}
-            disabled={busy || !username.trim()}
-            className="rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium disabled:opacity-50"
-          >
-            {busy ? '…' : 'Find drafts'}
-          </button>
+        <div className="flex rounded-md border border-border overflow-hidden text-sm">
+          {(['sleeper', 'espn'] as Platform[]).map((p) => (
+            <button
+              key={p}
+              onClick={() => { setPlatform(p); setError(null); persist({ platform: p }) }}
+              className={cn(
+                'flex-1 py-2 font-medium capitalize transition-colors',
+                platform === p ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {p === 'espn' ? 'ESPN' : 'Sleeper'}
+            </button>
+          ))}
         </div>
-        {error && <div className="text-sm text-red-400">{error}</div>}
-        {drafts && drafts.length > 0 && (
-          <div className="space-y-2">
-            {drafts.map((d) => (
+
+        {platform === 'sleeper' && (
+          <>
+            <div className="flex gap-2">
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && username.trim()) findDrafts() }}
+                placeholder="Sleeper username"
+                className="flex-1 rounded-md border border-border bg-transparent px-3 py-2 text-sm"
+              />
               <button
-                key={d.draft_id}
-                onClick={() => { setDraftId(d.draft_id); persist({ draftId: d.draft_id }) }}
-                className="w-full text-left rounded-md border border-border px-3 py-2 hover:bg-muted/40 transition-colors"
+                onClick={findDrafts}
+                disabled={busy || !username.trim()}
+                className="rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium disabled:opacity-50"
               >
-                <div className="text-sm font-medium">{d.metadata?.name || d.draft_id}</div>
-                <div className="text-xs text-muted-foreground">
-                  {d.season} · {d.settings?.teams} teams · {d.settings?.rounds} rounds · {d.status}
-                </div>
+                {busy ? '…' : 'Find drafts'}
               </button>
-            ))}
-          </div>
+            </div>
+            {drafts && drafts.length > 0 && (
+              <div className="space-y-2">
+                {drafts.map((d) => (
+                  <button
+                    key={d.draft_id}
+                    onClick={() => { setDraftId(d.draft_id); persist({ draftId: d.draft_id }) }}
+                    className="w-full text-left rounded-md border border-border px-3 py-2 hover:bg-muted/40 transition-colors"
+                  >
+                    <div className="text-sm font-medium">{d.metadata?.name || d.draft_id}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {d.season} · {d.settings?.teams} teams · {d.settings?.rounds} rounds · {d.status}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
         )}
+
+        {platform === 'espn' && (
+          <>
+            <div className="flex gap-2">
+              <input
+                value={espnLeagueId}
+                onChange={(e) => setEspnLeagueId(e.target.value)}
+                placeholder="ESPN league ID"
+                inputMode="numeric"
+                className="flex-1 rounded-md border border-border bg-transparent px-3 py-2 text-sm"
+              />
+              <input
+                value={espnSeason}
+                onChange={(e) => setEspnSeason(e.target.value)}
+                inputMode="numeric"
+                className="w-20 rounded-md border border-border bg-transparent px-3 py-2 text-sm"
+                title="season"
+              />
+              <button
+                onClick={loadEspnLeague}
+                disabled={busy || !espnLeagueId.trim()}
+                className="rounded-md bg-primary text-primary-foreground px-4 py-2 text-sm font-medium disabled:opacity-50"
+              >
+                {busy ? '…' : 'Load'}
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              The league ID is the <code>leagueId=</code> number in any of your ESPN league URLs.
+              Real leagues only (ESPN never publishes mock-draft picks). Private leagues need the
+              ESPN_S2 / ESPN_SWID env vars set on the server.
+            </p>
+            {espnTeams && espnTeams.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-sm text-muted-foreground">Which team is yours?</div>
+                {espnTeams.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => { setEspnTeamId(t.id); persist({ espnTeamId: t.id }) }}
+                    className="w-full text-left rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/40 transition-colors"
+                  >
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {error && <div className="text-sm text-red-400">{error}</div>}
       </div>
     )
   }
@@ -239,10 +430,7 @@ export default function DraftCompanion() {
             </div>
           )}
         </div>
-        <button
-          onClick={() => { setDraftId(null); setSnap(null); setDrafts(null); persist({ draftId: null }) }}
-          className="text-xs text-muted-foreground underline underline-offset-2"
-        >
+        <button onClick={reset} className="text-xs text-muted-foreground underline underline-offset-2">
           change
         </button>
       </div>
@@ -335,7 +523,10 @@ export default function DraftCompanion() {
 
       {snap && (
         <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>synced {new Date(snap.syncedAt).toLocaleTimeString()} · refreshes every 30s</span>
+          <span>
+            synced {new Date(snap.syncedAt).toLocaleTimeString()} · refreshes every {POLL_MS[platform] / 1000}s
+            {snap.unmatched > 0 && ` · ${snap.unmatched} picks off-board (K/DST)`}
+          </span>
           <button onClick={tick} className="underline underline-offset-2">refresh now</button>
         </div>
       )}

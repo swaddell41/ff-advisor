@@ -19,9 +19,10 @@ export default defineConfig({
       allow: ['..'],
     },
     proxy: {
-      // Forward /api/* requests to the FastAPI backend during development
+      // Forward /api/* requests to the FastAPI backend during development.
+      // VITE_API_TARGET overrides the target (e.g. a fixture backend).
       '/api': {
-        target: 'http://localhost:8000',
+        target: process.env.VITE_API_TARGET || 'http://localhost:8000',
         changeOrigin: true,
       },
     },
