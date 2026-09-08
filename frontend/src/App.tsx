@@ -11,6 +11,7 @@ import TradeDetail from '@/pages/TradeDetail'
 import ManagerList from '@/pages/ManagerList'
 import ManagerProfile from '@/pages/ManagerProfile'
 import DraftCompanion from '@/pages/DraftCompanion'
+import RedraftEval from '@/pages/RedraftEval'
 
 function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
   const { pathname } = useLocation()
@@ -124,6 +125,7 @@ export default function App() {
             <NavLink to="/">My Dashboard</NavLink>
             <NavLink to="/trade">Trade Hub</NavLink>
             <NavLink to="/draft">Draft</NavLink>
+            <NavLink to="/redraft">Redraft</NavLink>
             <NavLink to="/leagues">Browse Leagues</NavLink>
           </nav>
         </div>
@@ -149,6 +151,7 @@ export default function App() {
           <Route path="/" element={<MyDashboard />} />
           <Route path="/trade" element={<TradeHub />} />
           <Route path="/draft" element={<DraftCompanion />} />
+          <Route path="/redraft" element={<RedraftEval />} />
           <Route path="/acquire" element={<Navigate to="/trade" replace />} />
           <Route path="/sell" element={<Navigate to="/trade?mode=sell" replace />} />
           <Route path="/leagues" element={<LeaguePicker />} />
