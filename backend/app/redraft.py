@@ -88,8 +88,12 @@ def _cache_set(conn, key: str, data: Any) -> None:
 
 
 def fetch_auction_values(conn, season: int) -> dict:
-    """espn_id (str) -> {name, pos, team, aav, adp, proj}; cached 12h."""
-    key = f"espn://auction/{season}/v2"
+    """
+    espn_id (str) -> {name, pos, team, aav, adp, proj, injury, weeks};
+    weeks maps scoring period -> projected points for that week (the same
+    kona payload carries per-week projections, statSplitTypeId 1). Cached 12h.
+    """
+    key = f"espn://auction/{season}/v3"
     cached = _cache_get(conn, key, TRENDS_TTL_SECONDS)
     if cached is not None:
         return cached
@@ -113,13 +117,17 @@ def fetch_auction_values(conn, season: int) -> dict:
         pos = ESPN_POS.get(p.get("defaultPositionId"))
         if pid is None or pos is None or aav is None:
             continue
-        # Season-total projection: statSourceId 1 = projected, split 0 = season.
+        # statSourceId 1 = projected; split 0 = season total, split 1 = one
+        # week. Older seasons ride along in the payload — filter to `season`.
         proj = 0.0
+        weeks: dict[str, float] = {}
         for s in p.get("stats") or []:
-            if (s.get("statSourceId") == 1 and s.get("statSplitTypeId") == 0
-                    and s.get("seasonId") == season):
+            if s.get("statSourceId") != 1 or s.get("seasonId") != season:
+                continue
+            if s.get("statSplitTypeId") == 0:
                 proj = float(s.get("appliedTotal") or 0)
-                break
+            elif s.get("statSplitTypeId") == 1 and s.get("scoringPeriodId"):
+                weeks[str(s["scoringPeriodId"])] = round(float(s.get("appliedTotal") or 0), 1)
         out[str(pid)] = {
             "name": p.get("fullName"),
             "pos": pos,
@@ -127,6 +135,8 @@ def fetch_auction_values(conn, season: int) -> dict:
             "aav": round(float(aav), 2),
             "adp": round(float(own.get("averageDraftPosition") or 0), 1),
             "proj": round(proj, 1),
+            "injury": p.get("injuryStatus") or "",
+            "weeks": weeks,
         }
     if not out:
         raise RuntimeError("ESPN draft trends returned no auction values")

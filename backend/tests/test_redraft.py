@@ -81,3 +81,19 @@ def test_adp_curve_is_monotone_and_bounded():
 def test_methods_registry():
     from app.redraft import METHODS
     assert set(METHODS) == {"auction", "proj", "adp", "market"}
+
+
+def test_lineup_swap_plan():
+    from app.lineup import _build_result
+    players = [
+        {"name": "StarRB", "pos": "RB", "aav": 22.0, "injury": ""},
+        {"name": "BenchedStud", "pos": "WR", "aav": 18.0, "injury": ""},
+        {"name": "StartedDud", "pos": "WR", "aav": 4.0, "injury": ""},
+        {"name": "HurtGuy", "pos": "RB", "aav": 0.0, "injury": "OUT"},
+    ]
+    current = {"StarRB", "StartedDud", "HurtGuy"}
+    res = _build_result("T", 1, players, current, ["RB", "WR", "FLEX"])
+    assert [p["name"] for p in res["start"]] == ["BenchedStud"]
+    assert {p["name"] for p in res["sit"]} == {"HurtGuy"}  # dud keeps FLEX, hurt RB sits
+    assert res["delta"] == res["optimal_total"] - res["current_total"]
+    assert any(f["name"] == "HurtGuy" and f["why"] == "OUT" for f in res["flags"])

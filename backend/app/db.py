@@ -49,6 +49,7 @@ TABLE_PKS: dict[str, list[str]] = {
     "app_users": ["sleeper_user_id"],
     "sessions": ["token"],
     "user_leagues": ["sleeper_user_id", "league_id"],
+    "saved_leagues": ["sleeper_user_id", "platform", "league_id"],
     "adp_snapshots": ["player_id", "source", "format", "snapshot_date"],
     "player_ids": ["sleeper_id"],
 }
@@ -394,6 +395,21 @@ def init_schema(conn: sqlite3.Connection) -> None:
             sleeper_user_id TEXT NOT NULL,
             league_id       TEXT NOT NULL,
             PRIMARY KEY (sleeper_user_id, league_id)
+        );
+
+        -- Saved leagues for the redraft hub (draft companion / evaluation /
+        -- start-sit): any-platform bookmarks per signed-in user, with the
+        -- user's own team so tools can jump straight to it. Distinct from
+        -- user_leagues, which tracks dynasty IMPORTS.
+        CREATE TABLE IF NOT EXISTS saved_leagues (
+            sleeper_user_id TEXT NOT NULL,
+            platform        TEXT NOT NULL,
+            league_id       TEXT NOT NULL,
+            season          INT,
+            name            TEXT,
+            team_id         TEXT,
+            added_at        TIMESTAMP,
+            PRIMARY KEY (sleeper_user_id, platform, league_id)
         );
 
         -- Cross-platform player id mapping (from the DynastyProcess
