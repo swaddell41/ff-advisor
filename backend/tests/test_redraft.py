@@ -107,3 +107,21 @@ def test_blend_and_implied_total_math():
     ou, fav_spread = 44.5, -3.0
     assert round((ou - fav_spread) / 2, 1) == 23.8   # favorite
     assert round((ou - (-fav_spread)) / 2, 1) == 20.8  # underdog
+
+
+def test_optimal_lineup_display_order_is_positional():
+    from app.lineup import _build_result
+    players = [
+        {"name": "K1", "pos": "K", "aav": 9.0, "injury": ""},
+        {"name": "QB1", "pos": "QB", "aav": 20.0, "injury": ""},
+        {"name": "D1", "pos": "DST", "aav": 8.0, "injury": ""},
+        {"name": "WR1", "pos": "WR", "aav": 15.0, "injury": ""},
+        {"name": "RB1", "pos": "RB", "aav": 12.0, "injury": ""},
+        {"name": "RB2", "pos": "RB", "aav": 10.0, "injury": ""},
+        {"name": "WR2", "pos": "WR", "aav": 22.0, "injury": ""},  # highest scorer overall
+        {"name": "QB2", "pos": "QB", "aav": 11.0, "injury": ""},
+    ]
+    slots = ["QB", "RB", "WR", "TE", "FLEX", "SUPER_FLEX", "K", "DEF"]
+    res = _build_result("T", 1, players, set(), slots)
+    assert [p["slot"] for p in res["optimal"]] == ["QB", "RB", "WR", "FLEX", "SUPER_FLEX", "K", "DEF"]
+    assert res["optimal"][0]["name"] == "QB1"      # not WR2, despite 22.0

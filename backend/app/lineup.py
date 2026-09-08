@@ -146,8 +146,17 @@ def _wk_proj(v: dict | None, week: int) -> float:
     return float((v.get("weeks") or {}).get(str(week)) or 0.0)
 
 
+# Display order for the optimal lineup: positional slots first, flexes after
+# TE, then K/DEF — how lineups read on the platforms themselves.
+SLOT_ORDER = ["QB", "RB", "WR", "TE", "WRRB_FLEX", "REC_FLEX", "FLEX", "SUPER_FLEX", "K", "DEF"]
+
+
 def _build_result(name: str, week: int, players: list[dict], current_names: set[str], slots: list[str]) -> dict:
     optimal, bench = optimal_lineup(players, slots)
+    optimal.sort(key=lambda p: (
+        SLOT_ORDER.index(p["slot"]) if p["slot"] in SLOT_ORDER else len(SLOT_ORDER),
+        -(p["aav"] or 0),
+    ))
     optimal_names = {p["name"] for p in optimal}
     current = [p for p in players if p["name"] in current_names]
     current_total = round(sum(p["aav"] or 0 for p in current), 1)
