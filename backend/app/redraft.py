@@ -88,8 +88,8 @@ def _cache_set(conn, key: str, data: Any) -> None:
 
 
 def fetch_auction_values(conn, season: int) -> dict:
-    """espn_id (str) -> {name, pos, team, aav, adp}; cached 12h."""
-    key = f"espn://auction/{season}"
+    """espn_id (str) -> {name, pos, team, aav, adp, proj}; cached 12h."""
+    key = f"espn://auction/{season}/v2"
     cached = _cache_get(conn, key, TRENDS_TTL_SECONDS)
     if cached is not None:
         return cached
@@ -113,17 +113,89 @@ def fetch_auction_values(conn, season: int) -> dict:
         pos = ESPN_POS.get(p.get("defaultPositionId"))
         if pid is None or pos is None or aav is None:
             continue
+        # Season-total projection: statSourceId 1 = projected, split 0 = season.
+        proj = 0.0
+        for s in p.get("stats") or []:
+            if (s.get("statSourceId") == 1 and s.get("statSplitTypeId") == 0
+                    and s.get("seasonId") == season):
+                proj = float(s.get("appliedTotal") or 0)
+                break
         out[str(pid)] = {
             "name": p.get("fullName"),
             "pos": pos,
             "team": PRO_TEAM.get(p.get("proTeamId"), ""),
             "aav": round(float(aav), 2),
             "adp": round(float(own.get("averageDraftPosition") or 0), 1),
+            "proj": round(proj, 1),
         }
     if not out:
         raise RuntimeError("ESPN draft trends returned no auction values")
     _cache_set(conn, key, out)
     return out
+
+
+# Evaluation methods. All price a roster, in different currencies:
+#   auction — average winning bid in real ESPN auction drafts ($).
+#   proj    — ESPN season-long projected fantasy points (analyst lens).
+#   adp     — the market cost of each player's draft SLOT: real ESPN ADP fed
+#             through a value curve fit from this season's own AAV-by-ADP
+#             sheet (median $ per ADP bucket, forced monotone). Prices the
+#             pick, not the player — the classic "draft capital" lens.
+#   market  — FantasyCalc redraft trade values (real trades), already
+#             ingested daily into value_snapshots.
+METHODS = {
+    "auction": "$",
+    "proj": "pts",
+    "adp": "$",
+    "market": "val",
+}
+
+
+def _adp_curve(values: dict) -> "callable":
+    buckets: dict[int, list[float]] = {}
+    for v in values.values():
+        adp = v.get("adp") or 0
+        if adp <= 0:
+            continue
+        buckets.setdefault(int(round(adp)), []).append(v.get("aav") or 0)
+    if not buckets:
+        return lambda adp: 0.0
+    med = {}
+    for b, xs in buckets.items():
+        xs.sort()
+        med[b] = xs[len(xs) // 2]
+    # Force monotone non-increasing from pick 1 outward, filling gaps.
+    slots = sorted(med)
+    filled: dict[int, float] = {}
+    cur = med[slots[0]]
+    for b in range(slots[0], slots[-1] + 1):
+        if b in med:
+            cur = min(cur, med[b])
+        filled[b] = cur
+    lo, hi = slots[0], slots[-1]
+
+    def curve(adp: float | None) -> float:
+        if not adp or adp <= 0:
+            return 0.0
+        b = int(round(adp))
+        if b < lo:
+            b = lo
+        if b > hi:
+            return 0.0
+        return round(filled[b], 2)
+
+    return curve
+
+
+def _market_values(conn, fmt: str) -> dict[str, float]:
+    """sleeper_id -> latest fc_redraft trade-market value for the format."""
+    rows = conn.execute(
+        "SELECT player_id, value FROM value_snapshots "
+        "WHERE source = 'fc_redraft' AND format = ? AND snapshot_date = "
+        "(SELECT MAX(snapshot_date) FROM value_snapshots WHERE source = 'fc_redraft' AND format = ?)",
+        (fmt, fmt),
+    ).fetchall()
+    return {str(r[0]): float(r[1]) for r in rows}
 
 
 def _sleeper_to_espn(conn) -> dict[str, str]:
@@ -203,7 +275,31 @@ def _rank_teams(teams: list[dict]) -> None:
             t.setdefault("pos_rank", {})[pos] = i + 1
 
 
-def evaluate_sleeper(league_id: str, season: int) -> dict:
+def _make_pricer(conn, values: dict, method: str, slots: list[str]):
+    """(espn_id, sleeper_id) -> value under the chosen method, or None."""
+    curve = _adp_curve(values) if method == "adp" else None
+    market = None
+    if method == "market":
+        fmt = "sf_ppr" if "SUPER_FLEX" in slots else "1qb_ppr"
+        market = _market_values(conn, fmt)
+
+    def price(eid: str | None, sid: str | None) -> float | None:
+        if method == "market":
+            mv = market.get(str(sid)) if sid else None
+            return round(mv) if mv is not None else None
+        v = values.get(eid) if eid else None
+        if not v:
+            return None
+        if method == "auction":
+            return v.get("aav")
+        if method == "proj":
+            return v.get("proj")
+        return curve(v.get("adp"))
+
+    return price
+
+
+def evaluate_sleeper(league_id: str, season: int, method: str = "auction") -> dict:
     from app.ingestion.sleeper import SleeperClient
 
     conn = get_connection()
@@ -217,6 +313,7 @@ def evaluate_sleeper(league_id: str, season: int) -> dict:
         rosters = client.get_league_rosters(league_id)
         all_players = client.get_all_players()
         slots = [s for s in (league.get("roster_positions") or []) if s != "BN"]
+        price = _make_pricer(conn, values, method, slots)
 
         teams = []
         for r in rosters:
@@ -233,7 +330,7 @@ def evaluate_sleeper(league_id: str, season: int) -> dict:
                 )
                 plist.append({
                     "name": pname, "pos": "DST" if pos == "DEF" else pos,
-                    "aav": (v or {}).get("aav") if v else None,
+                    "aav": price(eid, str(sid)),
                     "adp": (v or {}).get("adp") if v else None,
                 })
             teams.append(_team_sheet(tname, u.get("display_name") or "", plist, slots))
@@ -242,6 +339,8 @@ def evaluate_sleeper(league_id: str, season: int) -> dict:
             "platform": "sleeper",
             "league": {"name": league.get("name"), "teams": len(teams), "slots": slots},
             "season": season,
+            "method": method,
+            "unit": METHODS[method],
             "teams": sorted(teams, key=lambda t: t["rank"]),
         }
     finally:
@@ -255,12 +354,14 @@ ESPN_SLOT = {
 }
 
 
-def evaluate_espn(league_id: str, season: int) -> dict:
+def evaluate_espn(league_id: str, season: int, method: str = "auction") -> dict:
     from app.api.espn import _espn_cookies, LM_API
 
     conn = get_connection()
     try:
         values = fetch_auction_values(conn, season)
+        espn_to_sleeper = {v: k for k, v in _sleeper_to_espn(conn).items()}
+        espn_to_sleeper.update({v: k for k, v in _dst_espn_id_by_abbrev().items()})
         url = (
             f"{LM_API}/seasons/{season}/segments/0/leagues/{league_id}"
             "?view=mSettings&view=mTeam&view=mRoster"
@@ -275,6 +376,7 @@ def evaluate_espn(league_id: str, season: int) -> dict:
             token = ESPN_SLOT.get(int(sid))
             if token:
                 slots.extend([token] * int(n))
+        price = _make_pricer(conn, values, method, slots)
 
         teams = []
         for t in data.get("teams") or []:
@@ -282,12 +384,13 @@ def evaluate_espn(league_id: str, season: int) -> dict:
             plist = []
             for entry in ((t.get("roster") or {}).get("entries")) or []:
                 p = (entry.get("playerPoolEntry") or {}).get("player") or {}
-                v = values.get(str(p.get("id")))
+                eid = str(p.get("id"))
+                v = values.get(eid)
                 pos = (v or {}).get("pos") or ESPN_POS.get(p.get("defaultPositionId"), "?")
                 plist.append({
-                    "name": p.get("fullName") or str(p.get("id")),
+                    "name": p.get("fullName") or eid,
                     "pos": pos,
-                    "aav": (v or {}).get("aav") if v else None,
+                    "aav": price(eid, espn_to_sleeper.get(eid)),
                     "adp": (v or {}).get("adp") if v else None,
                 })
             teams.append(_team_sheet(tname, "", plist, slots))
@@ -296,6 +399,8 @@ def evaluate_espn(league_id: str, season: int) -> dict:
             "platform": "espn",
             "league": {"name": (settings.get("name") or "ESPN League"), "teams": len(teams), "slots": slots},
             "season": season,
+            "method": method,
+            "unit": METHODS[method],
             "teams": sorted(teams, key=lambda t: t["rank"]),
         }
     finally:

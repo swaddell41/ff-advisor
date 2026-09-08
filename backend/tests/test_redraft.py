@@ -61,3 +61,23 @@ def test_dst_abbrev_mapping_matches_espn_ids():
     assert m["HOU"] == "-16034"   # Texans D/ST, verified against live trends
     assert m["DEN"] == "-16007"
     assert m["WAS"] == "-16028"   # Sleeper says WAS where ESPN says WSH
+
+
+def test_adp_curve_is_monotone_and_bounded():
+    from app.redraft import _adp_curve
+    values = {
+        "1": {"aav": 70, "adp": 1.2}, "2": {"aav": 60, "adp": 2.1},
+        "3": {"aav": 65, "adp": 3.0},  # local bump must be flattened
+        "4": {"aav": 20, "adp": 10.0}, "5": {"aav": 1, "adp": 50.0},
+    }
+    curve = _adp_curve(values)
+    xs = [curve(a) for a in [1, 2, 3, 10, 50]]
+    assert xs == sorted(xs, reverse=True)
+    assert curve(3) <= curve(2)          # monotone despite the bump
+    assert curve(999) == 0.0             # beyond the sheet -> worthless
+    assert curve(None) == 0.0
+
+
+def test_methods_registry():
+    from app.redraft import METHODS
+    assert set(METHODS) == {"auction", "proj", "adp", "market"}
