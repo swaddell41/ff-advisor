@@ -183,14 +183,31 @@ export default function StartSit() {
             'rounded-lg border p-4',
             data.delta > 0.5 ? 'border-amber-500/40 bg-amber-500/5' : 'border-emerald-500/40 bg-emerald-500/5'
           )}>
-            <div className="text-sm text-muted-foreground">{data.league} · {data.team} · Week {data.week}</div>
-            <div className="text-lg font-semibold mt-0.5">
-              {data.delta > 0.5
-                ? <>You're leaving <span className="text-amber-400">{data.delta.toFixed(1)} pts</span> on the bench</>
-                : <span className="text-emerald-400">Lineup is optimal ✓</span>}
-            </div>
-            <div className="text-xs text-muted-foreground mt-0.5">
-              current {data.current_total.toFixed(1)} → optimal {data.optimal_total.toFixed(1)} projected pts
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm text-muted-foreground">{data.league} · {data.team} · Week {data.week}</div>
+                <div className="text-lg font-semibold mt-0.5">
+                  {data.delta > 0.5
+                    ? <>You're leaving <span className="text-amber-400">{data.delta.toFixed(1)} pts</span> on the bench</>
+                    : <span className="text-emerald-400">Lineup is optimal ✓</span>}
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  current {data.current_total.toFixed(1)} → optimal {data.optimal_total.toFixed(1)} projected pts
+                </div>
+              </div>
+              {/* Neither platform offers a supported lineup-write API (Sleeper's
+                  is read-only by policy), so the fix is one tap away instead:
+                  deep-link straight to this team's lineup page. */}
+              <a
+                href={platform === 'sleeper'
+                  ? `https://sleeper.com/leagues/${encodeURIComponent(leagueId.trim())}/team`
+                  : `https://fantasy.espn.com/football/team?leagueId=${encodeURIComponent(leagueId.trim())}&teamId=${encodeURIComponent(teamId)}&seasonId=2026`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-xs font-medium whitespace-nowrap"
+              >
+                Set lineup on {platform === 'sleeper' ? 'Sleeper' : 'ESPN'} ↗
+              </a>
             </div>
           </div>
 
