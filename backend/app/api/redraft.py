@@ -86,6 +86,9 @@ def list_saved_leagues(conn, uid: str) -> list[dict]:
             continue
         out.append({"platform": "sleeper", "league_id": str(lid), "season": season or 2026,
                     "name": name or str(lid), "team_id": "", "dynasty": True})
+    # Stable order: using a league re-saves it (fresh added_at), which would
+    # otherwise shuffle the chips every time one is picked.
+    out.sort(key=lambda o: ((o.get("name") or "").lower(), o["platform"], o["league_id"]))
     return out
 
 
