@@ -58,34 +58,43 @@ class SavedLeague(BaseModel):
     team_id: str = ""
 
 
+def list_saved_leagues(conn, uid: str) -> list[dict]:
+    """Saved leagues plus the user's imported dynasty leagues (flagged)."""
+    rows = conn.execute(
+            "SELECT platform, league_id, season, name, team_id FROM saved_leagues "
+            "WHERE sleeper_user_id = ? ORDER BY added_at DESC",
+            (uid,),
+        ).fetchall()
+    out = [
+        {"platform": r[0], "league_id": r[1], "season": r[2], "name": r[3], "team_id": r[4] or ""}
+        for r in rows
+    ]
+    # Dynasty leagues the user imported are leagues too — lineups and
+    # waivers apply to them just the same, so they join the chips.
+    seen = {(o["platform"], o["league_id"]) for o in out}
+    dyn = conn.execute(
+        "SELECT ul.league_id, l.name, l.season FROM user_leagues ul "
+        "LEFT JOIN leagues l ON l.id = ul.league_id WHERE ul.sleeper_user_id = ?",
+        (uid,),
+    ).fetchall()
+    dyn_ids = {str(r[0]) for r in dyn}
+    for o in out:
+        if o["platform"] == "sleeper" and o["league_id"] in dyn_ids:
+            o["dynasty"] = True
+    for lid, name, season in dyn:
+        if ("sleeper", str(lid)) in seen:
+            continue
+        out.append({"platform": "sleeper", "league_id": str(lid), "season": season or 2026,
+                    "name": name or str(lid), "team_id": "", "dynasty": True})
+    return out
+
+
 @router.get("/api/me/saved-leagues")
 def saved_leagues():
     uid = _require_user_id()
     conn = get_connection()
     try:
-        rows = conn.execute(
-            "SELECT platform, league_id, season, name, team_id FROM saved_leagues "
-            "WHERE sleeper_user_id = ? ORDER BY added_at DESC",
-            (uid,),
-        ).fetchall()
-        out = [
-            {"platform": r[0], "league_id": r[1], "season": r[2], "name": r[3], "team_id": r[4] or ""}
-            for r in rows
-        ]
-        # Dynasty leagues the user imported are leagues too — lineups and
-        # waivers apply to them just the same, so they join the chips.
-        seen = {(o["platform"], o["league_id"]) for o in out}
-        dyn = conn.execute(
-            "SELECT ul.league_id, l.name, l.season FROM user_leagues ul "
-            "LEFT JOIN leagues l ON l.id = ul.league_id WHERE ul.sleeper_user_id = ?",
-            (uid,),
-        ).fetchall()
-        for lid, name, season in dyn:
-            if ("sleeper", str(lid)) in seen:
-                continue
-            out.append({"platform": "sleeper", "league_id": str(lid), "season": season or 2026,
-                        "name": name or str(lid), "team_id": "", "dynasty": True})
-        return out
+        return list_saved_leagues(conn, uid)
     finally:
         conn.close()
 

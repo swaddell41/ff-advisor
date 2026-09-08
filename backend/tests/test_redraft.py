@@ -169,3 +169,17 @@ def test_waiver_analysis_bars_and_tiers():
     assert by["Nobody"]["tier"] == "pass" and by["Nobody"]["faab"]["bid"] == 0
     assert res["drop"]["name"] == "BenchRB"
     assert res["candidates"][0]["name"] == "Breakout"
+
+
+def test_trade_prompt_rules():
+    from app.home import trade_prompt
+    needs = {"WR": {"label": "need", "need_score": 0.2}, "RB": {"label": "surplus", "need_score": -0.2}}
+    assert trade_prompt("contend", 0, 0, None, 10, 1, needs)["action"] == "hold"          # preseason
+    assert trade_prompt("contend", 2, 1, 3, 10, 4, needs)["action"] == "buy"             # contender with a hole
+    assert trade_prompt("contend", 1, 4, 9, 10, 6, needs)["action"] == "reassess"        # contender sinking
+    assert trade_prompt("rebuild", 1, 4, 9, 10, 6, needs)["action"] == "sell"            # rebuilding, losing
+    assert trade_prompt("rebuild", 5, 0, 1, 10, 6, needs)["action"] == "reassess"        # rebuilding, winning
+    assert trade_prompt("middling", 1, 4, 9, 10, 6, needs)["action"] == "sell"           # no goal, out of it
+    assert trade_prompt("middling", 3, 2, 4, 10, 6, needs)["action"] == "buy"            # no goal, in the hunt, has a hole
+    p = trade_prompt("contend", 2, 1, 3, 10, 4, needs)
+    assert p["needs"] == ["WR"] and p["surplus"] == ["RB"]

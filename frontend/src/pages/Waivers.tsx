@@ -40,7 +40,10 @@ const TIER_STYLE: Record<Cand['tier'], string> = {
 }
 
 export default function Waivers() {
+  // A ?platform=&league=&team= link (from My Leagues) wins over the last-used league.
   const saved = (() => {
+    const qp = new URLSearchParams(window.location.search)
+    if (qp.get('league')) return { platform: qp.get('platform') || 'sleeper', leagueId: qp.get('league'), teamId: qp.get('team') || '' }
     try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}') } catch { return {} }
   })()
   const { leagues, save, remove } = useSavedLeagues()

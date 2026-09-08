@@ -53,7 +53,10 @@ function heat(rank: number | undefined, teams: number): string {
 }
 
 export default function RedraftEval() {
+  // A ?platform=&league= link (from My Leagues) wins over the last-used league.
   const saved = (() => {
+    const qp = new URLSearchParams(window.location.search)
+    if (qp.get('league')) return { platform: qp.get('platform') || 'sleeper', leagueId: qp.get('league') }
     try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}') } catch { return {} }
   })()
   const [platform, setPlatform] = useState<'sleeper' | 'espn'>(saved.platform || 'sleeper')
