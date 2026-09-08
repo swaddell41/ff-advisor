@@ -1,21 +1,29 @@
 """
 Start/sit engine: the user's CURRENT lineup vs the optimal one for this
-NFL week, priced by ESPN weekly projections (same cached kona sheet the
-redraft evaluator uses — statSplitTypeId 1 rows, one per scoring period).
+NFL week. Methodology follows current start/sit best practice — a point
+projection is the baseline, not the whole answer:
+
+  * CONSENSUS projections — ESPN weekly (cached kona sheet, split-1 rows)
+    blended with Sleeper's own weekly projections (public
+    api.sleeper.app/projections). Two independent sources beat one; their
+    disagreement is surfaced as an uncertainty signal.
+  * VEGAS game environment — over/under and spread per game from ESPN's
+    public scoreboard, turned into implied team totals (the strongest
+    single predictor of weekly scoring environment).
+  * CROWD — percentStarted from ESPN ownership (what managers actually do).
+  * INJURY/AVAILABILITY — designations flagged; OUT/IR/etc zeroed by the
+    projections themselves.
 
 Both platforms expose the currently set lineup, so this is true start/sit:
-Sleeper rosters carry `starters` (aligned to the league's non-bench
-roster_positions, "0" = empty slot); ESPN roster entries carry
-lineupSlotId (bench 20, IR 21). The optimal lineup reuses the redraft
-optimizer with weekly points as the value. NFL week comes from Sleeper's
-public /v1/state/nfl.
-
-Output is a swap plan: who to start, who to sit, and the projected points
-the current lineup leaves on the bench. Injury status and 0.0-projection
-starters (bye/out) are flagged.
+Sleeper rosters carry `starters`; ESPN roster entries carry lineupSlotId
+(bench 20, IR 21). The optimizer ranks by the blended projection; every
+row carries the full signal set so close calls can be judged in context.
+NFL week comes from Sleeper's public /v1/state/nfl.
 """
 
 import requests
+
+from app.redraft import _cache_get, _cache_set
 
 from app.db import get_connection
 from app.redraft import (
@@ -28,6 +36,99 @@ from app.redraft import (
 )
 
 BAD_INJURY = {"OUT", "INJURY_RESERVE", "SUSPENSION", "DOUBTFUL"}
+
+
+def fetch_vegas(conn, week: int) -> dict:
+    """
+    Team abbrev -> {opp, ou, spread, implied, kickoff} from ESPN's public
+    scoreboard. spread is team-relative (negative = favored); implied is the
+    team's implied point total: (over/under - spread) / 2. Cached 1h.
+    """
+    key = f"vegas://nfl/{week}"
+    cached = _cache_get(conn, key, 3600)
+    if cached is not None:
+        return cached
+    out: dict[str, dict] = {}
+    try:
+        resp = requests.get(
+            "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+            timeout=15,
+        )
+        resp.raise_for_status()
+        for ev in resp.json().get("events") or []:
+            comp = (ev.get("competitions") or [{}])[0]
+            comps = comp.get("competitors") or []
+            if len(comps) != 2:
+                continue
+            abbrevs = {}
+            for c in comps:
+                ab = ((c.get("team") or {}).get("abbreviation") or "").upper()
+                abbrevs[ab if ab != "WSH" else "WAS"] = c
+            odds = (comp.get("odds") or [{}])[0]
+            ou = odds.get("overUnder")
+            details = str(odds.get("details") or "")  # e.g. "SEA -3"
+            fav, spread = None, 0.0
+            parts = details.split()
+            if len(parts) == 2:
+                fav = parts[0].upper()
+                fav = "WAS" if fav == "WSH" else fav
+                try:
+                    spread = float(parts[1])
+                except ValueError:
+                    spread = 0.0
+            names = list(abbrevs)
+            for ab in names:
+                other = names[1] if ab == names[0] else names[0]
+                team_spread = spread if ab == fav else (-spread if fav else 0.0)
+                implied = round((float(ou) - team_spread) / 2, 1) if ou else None
+                out[ab] = {
+                    "opp": other,
+                    "ou": ou,
+                    "spread": team_spread,
+                    "implied": implied,
+                    "kickoff": ev.get("date"),
+                }
+        if out:
+            _cache_set(conn, key, out)
+    except Exception:
+        pass  # vegas is enrichment, never a blocker
+    return out
+
+
+def fetch_sleeper_projections(conn, season: int, week: int) -> dict:
+    """sleeper player_id -> {ppr, half_ppr, std} weekly projection. Cached 6h."""
+    key = f"sleeperproj://{season}/{week}"
+    cached = _cache_get(conn, key, 6 * 3600)
+    if cached is not None:
+        return cached
+    out: dict[str, dict] = {}
+    try:
+        resp = requests.get(
+            f"https://api.sleeper.app/projections/nfl/{season}/{week}"
+            "?season_type=regular"
+            "&position[]=QB&position[]=RB&position[]=WR&position[]=TE&position[]=K&position[]=DEF",
+            timeout=20,
+        )
+        resp.raise_for_status()
+        for row in resp.json() or []:
+            st = row.get("stats") or {}
+            out[str(row.get("player_id"))] = {
+                "ppr": round(float(st.get("pts_ppr") or 0), 1),
+                "half_ppr": round(float(st.get("pts_half_ppr") or 0), 1),
+                "std": round(float(st.get("pts_std") or 0), 1),
+            }
+        if out:
+            _cache_set(conn, key, out)
+    except Exception:
+        pass  # second opinion only — ESPN weekly proj still stands alone
+    return out
+
+
+def blend(espn: float, sleeper: float | None) -> float:
+    """Consensus value: mean of the sources that exist."""
+    if sleeper is None:
+        return round(espn, 1)
+    return round((espn + sleeper) / 2, 1)
 
 
 def current_nfl_week() -> int:
@@ -104,6 +205,11 @@ def lineup_sleeper(league_id: str, season: int, user_id: str, roster_id: int | N
         slots = [s for s in (league.get("roster_positions") or []) if s != "BN"]
         starters = set(str(s) for s in (mine.get("starters") or []) if s and s != "0")
 
+        vegas = fetch_vegas(conn, week)
+        sproj = fetch_sleeper_projections(conn, season, week)
+        rec = float((league.get("scoring_settings") or {}).get("rec") or 0)
+        skey = "ppr" if rec >= 1 else ("half_ppr" if rec >= 0.5 else "std")
+
         def prow(sid: str) -> dict:
             eid = xwalk.get(str(sid)) or dst.get(str(sid))
             v = values.get(eid) if eid else None
@@ -112,11 +218,20 @@ def lineup_sleeper(league_id: str, season: int, user_id: str, roster_id: int | N
             pname = (v or {}).get("name") or (
                 f"{meta.get('first_name', '')} {meta.get('last_name', '')}".strip() or str(sid)
             )
+            team = (v or {}).get("team") or (meta.get("team") or "")
+            sp = sproj.get(str(sid))
+            espn_proj = _wk_proj(v, week)
+            slpr_proj = sp.get(skey) if sp else None
             return {
                 "name": pname,
                 "pos": "DST" if pos == "DEF" else pos,
-                "aav": _wk_proj(v, week),
+                "aav": blend(espn_proj, slpr_proj),
+                "espn_proj": espn_proj,
+                "slpr_proj": slpr_proj,
+                "start_pct": (v or {}).get("start_pct"),
+                "team": team,
                 "injury": (v or {}).get("injury") or (meta.get("injury_status") or ""),
+                **(vegas.get(team) or {}),
             }
 
         players = [prow(sid) for sid in (mine.get("players") or [])]
@@ -155,15 +270,33 @@ def lineup_espn(league_id: str, season: int, team_id: int) -> dict:
         team = next((t for t in data.get("teams") or [] if t.get("id") == team_id), None)
         if team is None:
             raise ValueError(f"team {team_id} not in league")
+
+        vegas = fetch_vegas(conn, week)
+        sproj = fetch_sleeper_projections(conn, season, week)
+        espn_to_sleeper = {v: k for k, v in _sleeper_to_espn(conn).items()}
+        espn_to_sleeper.update({v: k for k, v in _dst_espn_id_by_abbrev().items()})
+
         players, current_names = [], set()
         for entry in ((team.get("roster") or {}).get("entries")) or []:
             p = (entry.get("playerPoolEntry") or {}).get("player") or {}
-            v = values.get(str(p.get("id")))
+            eid = str(p.get("id"))
+            v = values.get(eid)
+            tm = (v or {}).get("team") or ""
+            sp = sproj.get(espn_to_sleeper.get(eid) or "")
+            espn_proj = _wk_proj(v, week)
+            # ESPN leagues get the PPR sheet as the second opinion; ESPN's own
+            # projection already matches the league's real scoring.
+            slpr_proj = sp.get("ppr") if sp else None
             row = {
-                "name": p.get("fullName") or str(p.get("id")),
+                "name": p.get("fullName") or eid,
                 "pos": (v or {}).get("pos") or ESPN_POS.get(p.get("defaultPositionId"), "?"),
-                "aav": _wk_proj(v, week),
+                "aav": blend(espn_proj, slpr_proj),
+                "espn_proj": espn_proj,
+                "slpr_proj": slpr_proj,
+                "start_pct": (v or {}).get("start_pct"),
+                "team": tm,
                 "injury": (v or {}).get("injury") or p.get("injuryStatus") or "",
+                **(vegas.get(tm) or {}),
             }
             players.append(row)
             if int(entry.get("lineupSlotId", 20)) in ESPN_SLOT:

@@ -11,7 +11,11 @@ import { cn } from '@/lib/utils'
 const STORE_KEY = 'ffa-startsit'
 const BAD = new Set(['OUT', 'INJURY_RESERVE', 'SUSPENSION', 'DOUBTFUL'])
 
-interface Row { name: string; pos: string; aav: number | null; injury?: string; slot?: string }
+interface Row {
+  name: string; pos: string; aav: number | null; injury?: string; slot?: string
+  espn_proj?: number; slpr_proj?: number | null; start_pct?: number | null
+  team?: string; opp?: string; ou?: number | null; implied?: number | null; kickoff?: string
+}
 interface LineupResponse {
   league: string; team: string; week: number
   current_total: number; optimal_total: number; delta: number
@@ -78,6 +82,37 @@ export default function StartSit() {
         {r.injury.replace('_', ' ')}
       </span>
     ) : null
+
+  // The context line under each player: matchup, Vegas environment, crowd,
+  // and the two projection sources (flagged when they disagree hard).
+  const context = (r: Row) => {
+    const bits: React.ReactNode[] = []
+    if (r.team && r.opp) {
+      bits.push(<span key="m">{r.team} vs {r.opp}</span>)
+      if (r.implied != null) {
+        bits.push(
+          <span key="v" className={cn(r.implied >= 26 ? 'text-emerald-400' : r.implied <= 19 ? 'text-red-400/80' : '')}>
+            implied {r.implied.toFixed(1)}{r.ou != null ? ` (O/U ${r.ou})` : ''}
+          </span>
+        )
+      }
+    }
+    if (r.espn_proj != null && r.slpr_proj != null) {
+      const gap = Math.abs(r.espn_proj - (r.slpr_proj ?? 0))
+      bits.push(
+        <span key="p" className={cn(gap >= 5 && 'text-amber-400')} title="ESPN / Sleeper weekly projections">
+          ESPN {r.espn_proj.toFixed(1)} · Slpr {(r.slpr_proj ?? 0).toFixed(1)}{gap >= 5 ? ' ⚖ split' : ''}
+        </span>
+      )
+    }
+    if (r.start_pct != null) bits.push(<span key="s">{Math.round(r.start_pct)}% started</span>)
+    if (!bits.length) return null
+    return (
+      <div className="text-[11px] text-muted-foreground flex flex-wrap gap-x-2.5">
+        {bits}
+      </div>
+    )
+  }
 
   return (
     <div className="max-w-2xl space-y-5">
@@ -164,18 +199,24 @@ export default function StartSit() {
               <div className="rounded-lg border border-border p-3">
                 <div className="text-[11px] uppercase tracking-wider text-emerald-400 mb-1.5">Start</div>
                 {data.start.map((r) => (
-                  <div key={r.name} className="flex justify-between text-sm py-0.5">
-                    <span>{r.name} <span className="text-xs text-muted-foreground">{r.pos}</span>{inj(r)}</span>
-                    <span className="tabular-nums">{(r.aav ?? 0).toFixed(1)}</span>
+                  <div key={r.name} className="py-1">
+                    <div className="flex justify-between text-sm">
+                      <span>{r.name} <span className="text-xs text-muted-foreground">{r.pos}</span>{inj(r)}</span>
+                      <span className="tabular-nums">{(r.aav ?? 0).toFixed(1)}</span>
+                    </div>
+                    {context(r)}
                   </div>
                 ))}
               </div>
               <div className="rounded-lg border border-border p-3">
                 <div className="text-[11px] uppercase tracking-wider text-red-400 mb-1.5">Sit</div>
                 {data.sit.map((r) => (
-                  <div key={r.name} className="flex justify-between text-sm py-0.5">
-                    <span>{r.name} <span className="text-xs text-muted-foreground">{r.pos}</span>{inj(r)}</span>
-                    <span className="tabular-nums">{(r.aav ?? 0).toFixed(1)}</span>
+                  <div key={r.name} className="py-1">
+                    <div className="flex justify-between text-sm">
+                      <span>{r.name} <span className="text-xs text-muted-foreground">{r.pos}</span>{inj(r)}</span>
+                      <span className="tabular-nums">{(r.aav ?? 0).toFixed(1)}</span>
+                    </div>
+                    {context(r)}
                   </div>
                 ))}
               </div>
@@ -193,14 +234,29 @@ export default function StartSit() {
               Optimal lineup · week {data.week}
             </div>
             {data.optimal.map((r, i) => (
-              <div key={i} className="flex justify-between px-3 py-1.5 text-sm border-b border-border last:border-b-0">
-                <span>
-                  <span className="text-muted-foreground text-xs w-20 inline-block">{r.slot}</span>
-                  {r.name}{inj(r)}
-                </span>
-                <span className="tabular-nums">{(r.aav ?? 0).toFixed(1)}</span>
+              <div key={i} className="px-3 py-1.5 border-b border-border last:border-b-0">
+                <div className="flex justify-between text-sm">
+                  <span>
+                    <span className="text-muted-foreground text-xs w-20 inline-block">{r.slot}</span>
+                    {r.name}{inj(r)}
+                  </span>
+                  <span className="tabular-nums font-medium">{(r.aav ?? 0).toFixed(1)}</span>
+                </div>
+                <div className="pl-20">{context(r)}</div>
               </div>
             ))}
+          </div>
+
+          <div className="text-xs text-muted-foreground max-w-2xl space-y-1">
+            <div>
+              <span className="font-medium text-foreground">How this works:</span> players are ranked
+              by a consensus of ESPN and Sleeper weekly projections (⚖ marks a 5+ pt disagreement —
+              trust it less). Vegas implied totals give the scoring environment
+              (<span className="text-emerald-400">26+</span> elite, <span className="text-red-400/80">≤19</span> ugly) —
+              the strongest single context signal. "% started" is what managers across ESPN are doing.
+              On close calls: favored in your matchup → take the safer floor; trailing or underdog →
+              take the upside.
+            </div>
           </div>
         </>
       )}

@@ -97,3 +97,13 @@ def test_lineup_swap_plan():
     assert {p["name"] for p in res["sit"]} == {"HurtGuy"}  # dud keeps FLEX, hurt RB sits
     assert res["delta"] == res["optimal_total"] - res["current_total"]
     assert any(f["name"] == "HurtGuy" and f["why"] == "OUT" for f in res["flags"])
+
+
+def test_blend_and_implied_total_math():
+    from app.lineup import blend
+    assert blend(20.0, 10.0) == 15.0
+    assert blend(20.0, None) == 20.0   # single source stands alone
+    # implied = (over/under - team spread) / 2; favorite carries a negative spread
+    ou, fav_spread = 44.5, -3.0
+    assert round((ou - fav_spread) / 2, 1) == 23.8   # favorite
+    assert round((ou - (-fav_spread)) / 2, 1) == 20.8  # underdog
