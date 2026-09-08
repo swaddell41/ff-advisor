@@ -7,7 +7,11 @@
 
 @theme inline {
     --font-heading: var(--font-sans);
-    --font-sans: 'Geist Variable', sans-serif;
+    /* Scoreboard graphite — the Chrome extension's design language (see
+       extension/panel.css), carried across the whole app: IBM Plex, warm
+       graphite surfaces, amber accent, square corners. */
+    --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -49,38 +53,42 @@
 }
 
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    /* Scoreboard graphite tokens, lifted from extension/panel.css + the
+       annotate.js UI palette: bg 0.14, card 0.2, border 0.3 on a warm
+       hue-70 axis; text 0.92; amber accent 0.8/0.13/75. */
+    --background: oklch(0.14 0.008 70);
+    --foreground: oklch(0.92 0.008 80);
+    --card: oklch(0.2 0.008 70);
+    --card-foreground: oklch(0.92 0.008 80);
+    --popover: oklch(0.2 0.008 70);
+    --popover-foreground: oklch(0.92 0.008 80);
+    --primary: oklch(0.8 0.13 75);
+    --primary-foreground: oklch(0.2 0.03 75);
+    --secondary: oklch(0.24 0.01 70);
+    --secondary-foreground: oklch(0.92 0.008 80);
+    --muted: oklch(0.24 0.01 70);
+    --muted-foreground: oklch(0.62 0.02 70);
+    --accent: oklch(0.26 0.01 70);
+    --accent-foreground: oklch(0.92 0.008 80);
+    --destructive: oklch(0.76 0.15 30);
+    --border: oklch(0.3 0.01 70);
+    --input: oklch(0.3 0.01 70);
+    --ring: oklch(0.8 0.13 75);
+    --chart-1: oklch(0.8 0.13 75);
+    --chart-2: oklch(0.72 0.02 70);
+    --chart-3: oklch(0.6 0.02 70);
+    --chart-4: oklch(0.42 0.07 75);
+    --chart-5: oklch(0.3 0.01 70);
+    --radius: 0rem;
+    --sidebar: oklch(0.2 0.008 70);
+    --sidebar-foreground: oklch(0.92 0.008 80);
+    --sidebar-primary: oklch(0.8 0.13 75);
+    --sidebar-primary-foreground: oklch(0.2 0.03 75);
+    --sidebar-accent: oklch(0.26 0.01 70);
+    --sidebar-accent-foreground: oklch(0.92 0.008 80);
+    --sidebar-border: oklch(0.3 0.01 70);
+    --sidebar-ring: oklch(0.8 0.13 75);
+    color-scheme: dark;
 }
 
 .dark {
@@ -127,4 +135,10 @@
   html {
     @apply font-sans;
     }
+  /* The extension sets its uppercase labels and every number in Plex Mono
+     (scoreboard feel). Carry that through: tracked labels and tabular
+     figures pick up the mono face app-wide. */
+  .tracking-wider, .tracking-wide, .tabular-nums {
+    font-family: var(--font-mono);
+  }
 }

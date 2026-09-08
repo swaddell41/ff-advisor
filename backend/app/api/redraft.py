@@ -9,8 +9,27 @@ from app.api.me import _require_user_id
 from app.db import get_connection
 from app.lineup import lineup_espn, lineup_sleeper
 from app.redraft import METHODS, evaluate_espn, evaluate_sleeper
+from app.waivers import waivers_espn, waivers_sleeper
 
 router = APIRouter()
+
+
+@router.get("/api/waivers")
+def waivers(platform: str, league_id: str, season: int = 2026,
+            roster_id: int | None = None, team_id: int | None = None):
+    uid = _require_user_id()
+    try:
+        if platform == "sleeper":
+            return waivers_sleeper(league_id, season, uid, roster_id)
+        if platform == "espn":
+            if team_id is None:
+                raise ValueError("team_id required for ESPN (pick your team)")
+            return waivers_espn(league_id, season, team_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    raise HTTPException(status_code=400, detail="platform must be sleeper or espn")
 
 
 @router.get("/api/lineup")
@@ -49,10 +68,24 @@ def saved_leagues():
             "WHERE sleeper_user_id = ? ORDER BY added_at DESC",
             (uid,),
         ).fetchall()
-        return [
+        out = [
             {"platform": r[0], "league_id": r[1], "season": r[2], "name": r[3], "team_id": r[4] or ""}
             for r in rows
         ]
+        # Dynasty leagues the user imported are leagues too — lineups and
+        # waivers apply to them just the same, so they join the chips.
+        seen = {(o["platform"], o["league_id"]) for o in out}
+        dyn = conn.execute(
+            "SELECT ul.league_id, l.name, l.season FROM user_leagues ul "
+            "LEFT JOIN leagues l ON l.id = ul.league_id WHERE ul.sleeper_user_id = ?",
+            (uid,),
+        ).fetchall()
+        for lid, name, season in dyn:
+            if ("sleeper", str(lid)) in seen:
+                continue
+            out.append({"platform": "sleeper", "league_id": str(lid), "season": season or 2026,
+                        "name": name or str(lid), "team_id": "", "dynasty": True})
+        return out
     finally:
         conn.close()
 

@@ -93,7 +93,7 @@ def fetch_auction_values(conn, season: int) -> dict:
     weeks maps scoring period -> projected points for that week (the same
     kona payload carries per-week projections, statSplitTypeId 1). Cached 12h.
     """
-    key = f"espn://auction/{season}/v4"
+    key = f"espn://auction/{season}/v5"
     cached = _cache_get(conn, key, TRENDS_TTL_SECONDS)
     if cached is not None:
         return cached
@@ -137,6 +137,8 @@ def fetch_auction_values(conn, season: int) -> dict:
             "proj": round(proj, 1),
             "injury": p.get("injuryStatus") or "",
             "start_pct": round(float(own.get("percentStarted") or 0), 1),
+            "pct_owned": round(float(own.get("percentOwned") or 0), 1),
+            "pct_change": round(float(own.get("percentChange") or 0), 2),
             "weeks": weeks,
         }
     if not out:

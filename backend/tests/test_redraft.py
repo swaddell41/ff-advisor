@@ -125,3 +125,47 @@ def test_optimal_lineup_display_order_is_positional():
     res = _build_result("T", 1, players, set(), slots)
     assert [p["slot"] for p in res["optimal"]] == ["QB", "RB", "WR", "FLEX", "SUPER_FLEX", "K", "DEF"]
     assert res["optimal"][0]["name"] == "QB1"      # not WR2, despite 22.0
+
+
+def test_faab_tiers_follow_expert_rules():
+    from app.waivers import recommend_bid
+    # League-winner, hot trend, early season: top of the 40-60% range.
+    lw = recommend_bid("league-winner", 100, 3, trend_rank=2)
+    assert 55 <= lw["bid"] <= 60
+    # A new starter never exceeds 30% of remaining, and stays <=25% in month one.
+    st = recommend_bid("starter", 100, 2, trend_rank=1)
+    assert st["bid"] <= 25
+    st_mid = recommend_bid("starter", 100, 8, trend_rank=1)
+    assert 25 <= st_mid["bid"] <= 30
+    # Depreciation: same claim is cheaper in the playoffs.
+    late = recommend_bid("starter", 100, 16, trend_rank=1)
+    assert late["bid"] < st_mid["bid"]
+    # Streamers are $1-4 money; a pass bids nothing.
+    assert 1 <= recommend_bid("streamer", 100, 6, None)["bid"] <= 4
+    assert recommend_bid("pass", 100, 6, None)["bid"] == 0
+
+
+def test_waiver_analysis_bars_and_tiers():
+    from app.waivers import analyze
+    mine = [
+        {"name": "RB1", "pos": "RB", "aav": 16.0, "season": 220},
+        {"name": "RB2", "pos": "RB", "aav": 8.0, "season": 120},
+        {"name": "WR1", "pos": "WR", "aav": 14.0, "season": 200},
+        {"name": "WR2", "pos": "WR", "aav": 9.0, "season": 130},
+        {"name": "BenchRB", "pos": "RB", "aav": 3.0, "season": 60},
+    ]
+    cands = [
+        {"name": "Breakout", "pos": "RB", "aav": 15.0, "season": 180, "trend_rank": 1},
+        {"name": "Dart", "pos": "WR", "aav": 7.0, "season": 100, "trend_rank": 12},
+        {"name": "Nobody", "pos": "WR", "aav": 2.0, "season": 30, "trend_rank": None},
+    ]
+    res = analyze(mine, cands, ["RB", "RB", "WR", "WR"], week=6,
+                  faab={"enabled": True, "budget": 100, "used": 20, "remaining": 80}, waiver_position=None)
+    by = {c["name"]: c for c in res["candidates"]}
+    assert res["bars"]["RB"]["name"] == "RB2"                 # weakest RB starter is the bar
+    assert by["Breakout"]["tier"] == "league-winner"         # +7 over the bar with a real role
+    assert by["Breakout"]["faab"]["bid"] >= 32                # 40%+ of the $80 remaining
+    assert by["Dart"]["tier"] == "upside" and by["Dart"]["faab"]["bid"] < 10
+    assert by["Nobody"]["tier"] == "pass" and by["Nobody"]["faab"]["bid"] == 0
+    assert res["drop"]["name"] == "BenchRB"
+    assert res["candidates"][0]["name"] == "Breakout"
