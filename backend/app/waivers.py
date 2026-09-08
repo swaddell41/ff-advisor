@@ -34,6 +34,7 @@ import requests
 
 from app.db import get_connection
 from app.lineup import (
+    LIVE_ROSTER_TTL,
     blend,
     current_nfl_week,
     fetch_sleeper_projections,
@@ -261,7 +262,7 @@ def waivers_sleeper(league_id: str, season: int, user_id: str, roster_id: int | 
         rev.update({v: k for k, v in dst.items()})
         client = SleeperClient(conn)
         league = client.get_league(league_id)
-        rosters = client.get_league_rosters(league_id)
+        rosters = client.get_league_rosters(league_id, ttl=LIVE_ROSTER_TTL)
         all_players = client.get_all_players()
         trending = fetch_trending(conn)
         vegas = fetch_vegas(conn, week)

@@ -36,6 +36,9 @@ from app.redraft import (
 )
 
 BAD_INJURY = {"OUT", "INJURY_RESERVE", "SUSPENSION", "DOUBTFUL"}
+# Rosters hold the set lineup: a lineup change should show up on the next
+# refresh, not an hour later (the ingestion cache default).
+LIVE_ROSTER_TTL = 30
 
 
 def fetch_vegas(conn, week: int) -> dict:
@@ -196,7 +199,7 @@ def lineup_sleeper(league_id: str, season: int, user_id: str, roster_id: int | N
         dst = _dst_espn_id_by_abbrev()
         client = SleeperClient(conn)
         league = client.get_league(league_id)
-        rosters = client.get_league_rosters(league_id)
+        rosters = client.get_league_rosters(league_id, ttl=LIVE_ROSTER_TTL)
         users = {u["user_id"]: u for u in client.get_league_users(league_id)}
         all_players = client.get_all_players()
 

@@ -59,9 +59,15 @@ class SleeperClient:
         """GET /v1/league/{league_id}/users"""
         return self._get(f"/v1/league/{league_id}/users", ttl=CACHE_TTL_SECONDS)
 
-    def get_league_rosters(self, league_id: str) -> list[dict]:
-        """GET /v1/league/{league_id}/rosters"""
-        return self._get(f"/v1/league/{league_id}/rosters", ttl=CACHE_TTL_SECONDS)
+    def get_league_rosters(self, league_id: str, ttl: int = CACHE_TTL_SECONDS) -> list[dict]:
+        """
+        GET /v1/league/{league_id}/rosters
+
+        Rosters carry the currently SET lineup, so live tools (start/sit,
+        waivers, home) pass a short ttl to see a change within seconds;
+        ingestion keeps the hour-long default.
+        """
+        return self._get(f"/v1/league/{league_id}/rosters", ttl=ttl)
 
     def get_transactions(self, league_id: str, week: int, mutable: bool = False) -> list[dict]:
         """

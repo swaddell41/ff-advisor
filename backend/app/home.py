@@ -17,7 +17,7 @@ Per league (computed in parallel, each one failing soft):
 from concurrent.futures import ThreadPoolExecutor
 
 from app.db import get_connection
-from app.lineup import current_nfl_week, lineup_espn, lineup_sleeper
+from app.lineup import LIVE_ROSTER_TTL, current_nfl_week, lineup_espn, lineup_sleeper
 from app.waivers import waivers_espn, waivers_sleeper
 
 SLEEPER_TYPE = {0: "redraft", 1: "keeper", 2: "dynasty"}
@@ -96,7 +96,7 @@ def _sleeper_card(conn_factory, uid: str, lg: dict, week: int, season: int) -> d
     try:
         client = SleeperClient(conn)
         league = client.get_league(lg["league_id"])
-        rosters = client.get_league_rosters(lg["league_id"])
+        rosters = client.get_league_rosters(lg["league_id"], ttl=LIVE_ROSTER_TTL)
         s = league.get("settings") or {}
         ltype = "dynasty" if lg.get("dynasty") else SLEEPER_TYPE.get(int(s.get("type") or 0), "redraft")
         mine = next((r for r in rosters if str(r.get("owner_id")) == str(uid)), None)
