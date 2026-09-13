@@ -6,6 +6,7 @@ from app.api.me import _require_user_id
 from app.api.redraft import list_saved_leagues
 from app.db import get_connection
 from app.home import build_home
+from app.live import build_live
 
 router = APIRouter()
 
@@ -19,3 +20,14 @@ def home(season: int = 2026):
     finally:
         conn.close()
     return build_home(uid, leagues, season)
+
+
+@router.get("/api/me/live")
+def live(season: int = 2026):
+    uid = _require_user_id()
+    conn = get_connection()
+    try:
+        leagues = list_saved_leagues(conn, uid)
+    finally:
+        conn.close()
+    return build_live(uid, leagues, season)

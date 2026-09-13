@@ -15,6 +15,7 @@ import RedraftEval from '@/pages/RedraftEval'
 import StartSit from '@/pages/StartSit'
 import Waivers from '@/pages/Waivers'
 import Home from '@/pages/Home'
+import Live from '@/pages/Live'
 
 function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
   const { pathname } = useLocation()
@@ -126,6 +127,7 @@ export default function App() {
           </Link>
           <nav className="flex items-center gap-4">
             <NavLink to="/">My Leagues</NavLink>
+            <NavLink to="/live">Live</NavLink>
             <NavLink to="/dynasty">Dynasty</NavLink>
             <NavLink to="/trade">Trade Hub</NavLink>
             <NavLink to="/draft">Draft</NavLink>
@@ -155,6 +157,7 @@ export default function App() {
       <main className="px-6 py-6 max-w-[1400px] mx-auto">
         <Routes>
           <Route path="/" element={<Home />} />
+          <Route path="/live" element={<Live />} />
           <Route path="/dynasty" element={<MyDashboard />} />
           <Route path="/trade" element={<TradeHub />} />
           <Route path="/draft" element={<DraftCompanion />} />

@@ -183,3 +183,20 @@ def test_trade_prompt_rules():
     assert trade_prompt("middling", 3, 2, 4, 10, 6, needs)["action"] == "buy"            # no goal, in the hunt, has a hole
     p = trade_prompt("contend", 2, 1, 3, 10, 4, needs)
     assert p["needs"] == ["WR"] and p["surplus"] == ["RB"]
+
+
+def test_live_side_summary():
+    from app.live import _side, _game
+    status = {"KC": {"state": "in", "detail": "Q2 4:10", "opp": "LAC"}, "BUF": {"state": "post", "detail": "Final", "opp": "NYJ"}}
+    starters = [
+        {"name": "A", "pos": "QB", "slot": "QB", "team": "KC", "points": 12.4, "proj": 20.0, "game": _game(status, "KC")},
+        {"name": "B", "pos": "RB", "slot": "RB", "team": "BUF", "points": 9.0, "proj": 14.0, "game": _game(status, "BUF")},
+        {"name": "C", "pos": "WR", "slot": "WR", "team": "DAL", "points": 0.0, "proj": 11.0, "game": _game(status, "DAL")},  # not on scoreboard -> bye
+        {"name": "D", "pos": "WR", "slot": "WR", "team": "KC", "points": 0.0, "proj": 9.0, "game": {"state": "pre", "detail": "4:25 PM"}},
+    ]
+    s = _side("Me", "me", starters)
+    assert s["points"] == 21.4
+    assert s["proj_remaining"] == 9.0          # only the 'pre' starter counts
+    assert s["in_play"] == 1 and s["yet_to_play"] == 1
+    assert starters[2]["game"]["state"] == "bye"
+    assert _side("Opp", "", starters, total=30.5)["points"] == 30.5   # platform total wins when given

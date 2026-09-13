@@ -69,6 +69,10 @@ class SleeperClient:
         """
         return self._get(f"/v1/league/{league_id}/rosters", ttl=ttl)
 
+    def get_matchups(self, league_id: str, week: int, ttl: int = CACHE_TTL_SECONDS) -> list[dict]:
+        """GET /v1/league/{league_id}/matchups/{week} — live points; pass a short ttl during games."""
+        return self._get(f"/v1/league/{league_id}/matchups/{week}", ttl=ttl)
+
     def get_transactions(self, league_id: str, week: int, mutable: bool = False) -> list[dict]:
         """
         GET /v1/league/{league_id}/transactions/{week}
