@@ -1,5 +1,6 @@
 """Redraft hub API: league evaluation, start/sit, and saved leagues."""
 
+import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
@@ -86,6 +87,18 @@ def list_saved_leagues(conn, uid: str) -> list[dict]:
             continue
         out.append({"platform": "sleeper", "league_id": str(lid), "season": season or 2026,
                     "name": name or str(lid), "team_id": "", "dynasty": True})
+    # The owner's ESPN leagues are discovered from ESPN itself (fan API via
+    # the configured cookies) so nothing has to be typed in. Gated to the
+    # owner's Sleeper id: the cookies belong to one person.
+    owner = os.environ.get("ESPN_OWNER_SLEEPER_ID", "").strip()
+    if owner and str(uid) == owner:
+        from app.api.espn import discover_espn_leagues
+        for d in discover_espn_leagues(conn, 2026):
+            if ("espn", d["league_id"]) in seen:
+                continue
+            seen.add(("espn", d["league_id"]))
+            out.append({"platform": "espn", "league_id": d["league_id"], "season": d["season"],
+                        "name": d["name"], "team_id": d["team_id"], "discovered": True})
     # Stable order: using a league re-saves it (fresh added_at), which would
     # otherwise shuffle the chips every time one is picked.
     out.sort(key=lambda o: ((o.get("name") or "").lower(), o["platform"], o["league_id"]))

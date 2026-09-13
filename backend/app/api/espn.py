@@ -150,3 +150,43 @@ def espn_draft(league_id: str, season: int):
         "drafted": bool(dd.get("drafted")),
         "in_progress": bool(dd.get("inProgress")),
     }
+
+
+def discover_espn_leagues(conn, season: int) -> list[dict]:
+    """
+    The ESPN leagues (and team ids) of the account whose cookies are
+    configured, from ESPN's fan API. Cached 12h. Empty when no cookies.
+    """
+    from app.redraft import _cache_get, _cache_set
+
+    cookies = _espn_cookies()
+    swid = cookies.get("SWID") or ""
+    if not swid:
+        return []
+    key = f"espn://fan/{season}"
+    cached = _cache_get(conn, key, 12 * 3600)
+    if cached is not None:
+        return cached
+    out: list[dict] = []
+    try:
+        resp = requests.get(f"https://fan.api.espn.com/apis/v2/fans/{swid}", cookies=cookies, timeout=15)
+        resp.raise_for_status()
+        for pref in (resp.json() or {}).get("preferences") or []:
+            entry = ((pref.get("metaData") or {}).get("entry")) or {}
+            url = entry.get("entryURL") or entry.get("entryLocation") or ""
+            if "football" not in url and "ffl" not in url:
+                continue
+            if f"seasonId={season}" not in url:
+                continue
+            team_id = ""
+            for part in url.split("?")[-1].split("&"):
+                if part.startswith("teamId="):
+                    team_id = part.split("=", 1)[1]
+            for g in entry.get("groups") or []:
+                if g.get("groupId"):
+                    out.append({"league_id": str(g["groupId"]), "name": g.get("groupName") or str(g["groupId"]),
+                                "team_id": team_id, "season": season})
+        _cache_set(conn, key, out)
+    except Exception:
+        pass
+    return out
