@@ -40,7 +40,7 @@ MATCHUP_TTL = 20
 
 def fetch_game_status(conn) -> dict[str, dict]:
     """team abbrev -> {state: pre|in|post, detail, opp} from ESPN's scoreboard."""
-    key = "scoreboard://status"
+    key = "scoreboard://status/v2"
     cached = _cache_get(conn, key, STATUS_TTL)
     if cached is not None:
         return cached
@@ -53,14 +53,21 @@ def fetch_game_status(conn) -> dict[str, dict]:
             st = (ev.get("status") or {}).get("type") or {}
             state = st.get("state") or "pre"
             detail = st.get("shortDetail") or ""
+            sit = comp.get("situation") or {}
+            poss_id = str(sit.get("possession") or "")
+            red_zone = bool(sit.get("isRedZone"))
             teams = []
             for c in comp.get("competitors") or []:
                 ab = ((c.get("team") or {}).get("abbreviation") or "").upper()
-                teams.append(("WAS" if ab == "WSH" else ab, c.get("score")))
-            for i, (ab, score) in enumerate(teams):
+                teams.append(("WAS" if ab == "WSH" else ab, c.get("score"), str(c.get("id") or "")))
+            for i, (ab, score, cid) in enumerate(teams):
                 opp = teams[1 - i][0] if len(teams) == 2 else ""
+                has_ball = state == "in" and poss_id and cid == poss_id
                 out[ab] = {"state": state, "detail": detail, "opp": opp,
-                           "score": score, "opp_score": teams[1 - i][1] if len(teams) == 2 else None}
+                           "score": score, "opp_score": teams[1 - i][1] if len(teams) == 2 else None,
+                           "possession": bool(has_ball),
+                           "red_zone": bool(has_ball and red_zone),
+                           "situation": sit.get("downDistanceText") or ""}
         if out:
             _cache_set(conn, key, out)
     except Exception:
@@ -216,6 +223,59 @@ def live_espn(league_id: str, week: int, team_id: int, season: int = 2026, name:
         conn.close()
 
 
+OFFENSE = {"QB", "RB", "WR", "TE", "K"}
+
+
+def aggregate(results: list[dict], status: dict) -> dict:
+    """
+    Cross-league views: starters in the red zone right now (mine vs my
+    opponents'), top performers (mine vs opponents'), and conflicts —
+    players I start in one league while facing them in another.
+    """
+    mine: dict[str, dict] = {}
+    theirs: dict[str, dict] = {}
+    my_rz, opp_rz = [], []
+
+    def key(s: dict) -> str:
+        return f"{s['name']}|{s['pos']}"
+
+    for m in results:
+        league = m.get("league") or ""
+        for side, book, rz in ((m.get("me"), mine, my_rz), (m.get("opp"), theirs, opp_rz)):
+            if not side:
+                continue
+            for s in side.get("starters") or []:
+                k = key(s)
+                row = book.setdefault(k, {"name": s["name"], "pos": s["pos"], "team": s["team"],
+                                          "points": 0.0, "leagues": [], "game": s["game"]})
+                row["points"] = max(row["points"], float(s["points"]))
+                row["leagues"].append(league)
+                g = status.get(s["team"]) or {}
+                if g.get("red_zone") and s["pos"] in OFFENSE and league not in [r["league"] for r in rz if r["name"] == s["name"]]:
+                    rz.append({"name": s["name"], "pos": s["pos"], "team": s["team"], "league": league,
+                               "situation": g.get("situation") or "", "detail": g.get("detail") or "",
+                               "vs": side.get("name") if side is m.get("opp") else None})
+
+    def top(book: dict, n: int = 8) -> list[dict]:
+        rows = [r for r in book.values() if r["points"] > 0]
+        rows.sort(key=lambda r: -r["points"])
+        return rows[:n]
+
+    conflicts = []
+    for k in mine.keys() & theirs.keys():
+        conflicts.append({
+            "name": mine[k]["name"], "pos": mine[k]["pos"], "team": mine[k]["team"],
+            "points": mine[k]["points"], "game": mine[k]["game"],
+            "have_in": mine[k]["leagues"], "face_in": theirs[k]["leagues"],
+        })
+    conflicts.sort(key=lambda c: -c["points"])
+    return {
+        "red_zone": {"mine": my_rz, "opp": opp_rz},
+        "top": {"mine": top(mine), "opp": top(theirs)},
+        "conflicts": conflicts,
+    }
+
+
 def build_live(uid: str, leagues: list[dict], season: int = 2026) -> dict:
     week = current_nfl_week()
 
@@ -238,6 +298,7 @@ def build_live(uid: str, leagues: list[dict], season: int = 2026) -> dict:
         status = fetch_game_status(conn)
     finally:
         conn.close()
+    extras = aggregate(results, status)
     counts: dict[str, int] = {}
     seen_games = set()
     for ab, g in status.items():
@@ -250,5 +311,6 @@ def build_live(uid: str, leagues: list[dict], season: int = 2026) -> dict:
         "week": week,
         "games": [{"state": k, "count": v} for k, v in counts.items()],
         "matchups": results,
+        **extras,
         "updated": datetime.now(timezone.utc).isoformat(),
     }

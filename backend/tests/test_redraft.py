@@ -200,3 +200,28 @@ def test_live_side_summary():
     assert s["in_play"] == 1 and s["yet_to_play"] == 1
     assert starters[2]["game"]["state"] == "bye"
     assert _side("Opp", "", starters, total=30.5)["points"] == 30.5   # platform total wins when given
+
+
+def test_live_aggregate_redzone_top_conflicts():
+    from app.live import aggregate
+    g = lambda st: {"state": st, "detail": "Q2 3:00"}
+    results = [
+        {"league": "A", "me": {"name": "Me", "starters": [
+            {"name": "Star", "pos": "WR", "team": "KC", "points": 21.0, "game": g("in")},
+            {"name": "Dud", "pos": "RB", "team": "BUF", "points": 2.0, "game": g("in")}]},
+         "opp": {"name": "OppA", "starters": [
+            {"name": "Enemy", "pos": "RB", "team": "KC", "points": 15.0, "game": g("in")}]}},
+        {"league": "B", "me": {"name": "Me", "starters": [
+            {"name": "Enemy", "pos": "RB", "team": "KC", "points": 15.0, "game": g("in")}]},
+         "opp": {"name": "OppB", "starters": [
+            {"name": "Star", "pos": "WR", "team": "KC", "points": 21.0, "game": g("in")}]}},
+    ]
+    status = {"KC": {"state": "in", "red_zone": True, "situation": "1st & Goal at BUF 4", "detail": "Q2 3:00"},
+              "BUF": {"state": "in", "red_zone": False}}
+    agg = aggregate(results, status)
+    assert {r["name"] for r in agg["red_zone"]["mine"]} == {"Star", "Enemy"}   # both KC, both mine somewhere
+    assert {r["name"] for r in agg["red_zone"]["opp"]} == {"Enemy", "Star"}
+    assert agg["top"]["mine"][0]["name"] == "Star" and agg["top"]["mine"][0]["points"] == 21.0
+    names = {c["name"]: c for c in agg["conflicts"]}
+    assert set(names) == {"Star", "Enemy"}
+    assert names["Star"]["have_in"] == ["A"] and names["Star"]["face_in"] == ["B"]

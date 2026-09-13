@@ -18,7 +18,13 @@ interface Matchup {
   scoreboard: { a: { name: string; points: number }; b: { name: string; points: number } }[]
   error?: string
 }
-interface LiveData { week: number; games: { state: string; count: number }[]; matchups: Matchup[]; updated: string }
+interface Agg { name: string; pos: string; team: string; points: number; leagues?: string[]; game?: { state: string; detail: string } }
+interface RZ { name: string; pos: string; team: string; league: string; situation: string; detail: string; vs?: string | null }
+interface Conflict extends Agg { have_in: string[]; face_in: string[] }
+interface LiveData {
+  week: number; games: { state: string; count: number }[]; matchups: Matchup[]; updated: string
+  red_zone?: { mine: RZ[]; opp: RZ[] }; top?: { mine: Agg[]; opp: Agg[] }; conflicts?: Conflict[]
+}
 
 const DOT: Record<Starter['game']['state'], string> = { in: 'bg-emerald-400', post: 'bg-muted-foreground', pre: 'bg-amber-400', bye: 'bg-red-400' }
 
@@ -83,6 +89,76 @@ export default function Live() {
       </div>
 
       {error && <div className="text-sm text-red-400">{error}</div>}
+
+      {data && (data.red_zone?.mine.length || data.red_zone?.opp.length) ? (
+        <div className="rounded-xl border border-red-500/40 bg-red-500/5 p-4">
+          <div className="text-[11px] uppercase tracking-wider text-red-400 mb-2">In the red zone right now</div>
+          <div className="grid sm:grid-cols-2 gap-4 text-sm">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Your players</div>
+              {data.red_zone!.mine.length === 0 && <div className="text-xs text-muted-foreground">none</div>}
+              {data.red_zone!.mine.map((r, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
+                  <span className="font-medium">{r.name}</span><span className="text-xs text-muted-foreground">{r.pos} · {r.team} · {r.situation || r.detail}</span>
+                  <span className="ml-auto text-xs text-muted-foreground">{r.league}</span>
+                </div>
+              ))}
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Opponents' players</div>
+              {data.red_zone!.opp.length === 0 && <div className="text-xs text-muted-foreground">none</div>}
+              {data.red_zone!.opp.map((r, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                  <span className="font-medium">{r.name}</span><span className="text-xs text-muted-foreground">{r.pos} · {r.team} · {r.situation || r.detail}</span>
+                  <span className="ml-auto text-xs text-muted-foreground">{r.league}{r.vs ? ` · ${r.vs}` : ''}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {data && (data.top?.mine.length || data.top?.opp.length) ? (
+        <div className="grid md:grid-cols-3 gap-3">
+          <div className="rounded-xl border border-border bg-card p-4">
+            <div className="text-[11px] uppercase tracking-wider text-emerald-400 mb-2">Your top performers</div>
+            {data.top!.mine.map((r, i) => (
+              <div key={i} className="flex items-center gap-2 text-sm py-0.5">
+                <span className="text-muted-foreground w-4 tabular-nums">{i + 1}</span>
+                <span className="truncate">{r.name} <span className="text-xs text-muted-foreground">{r.pos} · {r.team}{r.leagues && r.leagues.length > 1 ? ` · ×${r.leagues.length}` : ''}</span></span>
+                <span className="ml-auto tabular-nums font-medium">{r.points.toFixed(1)}</span>
+              </div>
+            ))}
+            {data.top!.mine.length === 0 && <div className="text-xs text-muted-foreground">no points yet</div>}
+          </div>
+          <div className="rounded-xl border border-border bg-card p-4">
+            <div className="text-[11px] uppercase tracking-wider text-amber-400 mb-2">Top players against you</div>
+            {data.top!.opp.map((r, i) => (
+              <div key={i} className="flex items-center gap-2 text-sm py-0.5">
+                <span className="text-muted-foreground w-4 tabular-nums">{i + 1}</span>
+                <span className="truncate">{r.name} <span className="text-xs text-muted-foreground">{r.pos} · {r.team}{r.leagues && r.leagues.length > 1 ? ` · ×${r.leagues.length}` : ''}</span></span>
+                <span className="ml-auto tabular-nums font-medium">{r.points.toFixed(1)}</span>
+              </div>
+            ))}
+            {data.top!.opp.length === 0 && <div className="text-xs text-muted-foreground">no points yet</div>}
+          </div>
+          <div className="rounded-xl border border-border bg-card p-4">
+            <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2">Conflicted rooting</div>
+            {(data.conflicts || []).length === 0 && <div className="text-xs text-muted-foreground">No player you both start and face this week.</div>}
+            {(data.conflicts || []).map((c, i) => (
+              <div key={i} className="text-sm py-0.5">
+                <div className="flex items-center gap-2">
+                  <span className="truncate">{c.name} <span className="text-xs text-muted-foreground">{c.pos} · {c.team}</span></span>
+                  <span className="ml-auto tabular-nums font-medium">{c.points.toFixed(1)}</span>
+                </div>
+                <div className="text-[11px] text-muted-foreground">yours in {c.have_in.join(', ')} · against you in {c.face_in.join(', ')}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid md:grid-cols-2 gap-3">
         {(data?.matchups || []).map((m) => {
