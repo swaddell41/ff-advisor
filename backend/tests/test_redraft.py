@@ -225,3 +225,31 @@ def test_live_aggregate_redzone_top_conflicts():
     names = {c["name"]: c for c in agg["conflicts"]}
     assert set(names) == {"Star", "Enemy"}
     assert names["Star"]["have_in"] == ["A"] and names["Star"]["face_in"] == ["B"]
+
+
+def test_live_feed_ranks_by_salience():
+    from app.live import build_feed
+    g_in = {"state": "in", "detail": "Q3 8:00"}
+    g_pre = {"state": "pre", "detail": "4:25 PM"}
+    close = {"platform": "sleeper", "league_id": "1", "league": "Close",
+             "me": {"points": 60.0, "proj_remaining": 30.0, "in_play": 3, "yet_to_play": 2,
+                    "starters": [{"name": "Jef", "pos": "WR", "team": "MIN", "points": 18.2, "game": g_in}]},
+             "opp": {"points": 58.0, "proj_remaining": 28.0, "in_play": 2, "yet_to_play": 3, "starters": []}}
+    blowout = {"platform": "sleeper", "league_id": "2", "league": "Blowout",
+               "me": {"points": 120.0, "proj_remaining": 0.0, "in_play": 0, "yet_to_play": 0, "starters": []},
+               "opp": {"points": 40.0, "proj_remaining": 0.0, "in_play": 0, "yet_to_play": 0, "starters": []}}
+    dormant = {"platform": "espn", "league_id": "3", "league": "Later",
+               "me": {"points": 0.0, "proj_remaining": 100.0, "in_play": 0, "yet_to_play": 9,
+                      "starters": [{"name": "Q", "pos": "QB", "team": "LAC", "points": 0.0, "game": g_pre}]},
+               "opp": {"points": 0.0, "proj_remaining": 95.0, "in_play": 0, "yet_to_play": 9, "starters": []}}
+    extras = {"red_zone": {"mine": [{"name": "Jef"}], "opp": []}, "conflicts": [], "top": {"mine": [{"name": "Jef"}], "opp": []}}
+    prev = {"Jef|WR": 11.0}   # Jef just went +7.2 since the last poll
+    feed, snap, events = build_feed([close, blowout, dormant], {}, extras, prev, [], now=1000.0)
+    kinds = [(f["kind"], f.get("league_id")) for f in feed]
+    assert kinds[0][0] == "redzone"
+    assert kinds[1][0] == "score" and feed[1]["delta"] == 7.2 and feed[1]["mine"] == ["Close"]
+    order = [k for k in kinds if k[0] == "matchup"]
+    assert order[0][1] == "1" and order[1][1] == "3" and order[2][1] == "2"   # close+live > undecided > blowout
+    assert kinds[-1] == ("matchup", "2")                      # a decided blowout sinks below the leaderboards
+    assert [k[0] for k in kinds].index("top") < len(kinds) - 1
+    assert snap["Jef|WR"] == 18.2 and len(events) == 1

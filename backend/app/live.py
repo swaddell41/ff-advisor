@@ -276,6 +276,94 @@ def aggregate(results: list[dict], status: dict) -> dict:
     }
 
 
+EVENT_TTL = 20 * 60        # a scoring burst stays in the feed this long, fading
+EVENT_MIN_DELTA = 2.0      # points jump between polls that counts as "something happened"
+
+
+def _load_events(conn, uid: str) -> tuple[dict, list]:
+    prev = _cache_get(conn, f"live://snap/{uid}", EVENT_TTL) or {}
+    events = _cache_get(conn, f"live://events/{uid}", EVENT_TTL) or []
+    return prev, events
+
+
+def build_feed(results: list[dict], status: dict, extras: dict, prev: dict, events: list, now: float) -> tuple[list[dict], dict, list]:
+    """
+    Rank everything on the page by how much it matters RIGHT NOW.
+    Returns (feed items sorted by score desc, new points snapshot, event log).
+    """
+    feed: list[dict] = []
+
+    # Who is mine / against me, per player key, for labeling events.
+    mine_in: dict[str, list[str]] = {}
+    opp_in: dict[str, list[str]] = {}
+    snapshot: dict[str, float] = {}
+    for m in results:
+        lg = m.get("league") or ""
+        for side, book in ((m.get("me"), mine_in), (m.get("opp"), opp_in)):
+            for st in (side or {}).get("starters") or []:
+                k = f"{st['name']}|{st['pos']}"
+                book.setdefault(k, []).append(lg)
+                snapshot[k] = max(snapshot.get(k, 0.0), float(st["points"]))
+                snapshot.setdefault(f"meta|{k}", {"name": st["name"], "pos": st["pos"], "team": st["team"], "game": st["game"]})  # type: ignore[arg-type]
+
+    # 1. Red zone — top of the page whenever it's live.
+    rz = extras.get("red_zone") or {}
+    if rz.get("mine") or rz.get("opp"):
+        feed.append({"kind": "redzone", "score": 100 + 3 * (len(rz.get("mine") or []) + len(rz.get("opp") or [])),
+                     "mine": rz.get("mine") or [], "opp": rz.get("opp") or []})
+
+    # 2. Scoring bursts since the last poll (kept ~20 min, fading).
+    new_events = []
+    if prev:
+        for k, pts in snapshot.items():
+            if k.startswith("meta|"):
+                continue
+            before = prev.get(k)
+            if before is None:
+                continue
+            delta = round(pts - float(before), 1)
+            if abs(delta) >= EVENT_MIN_DELTA:
+                meta = snapshot.get(f"meta|{k}") or {}
+                new_events.append({"key": k, "name": meta.get("name"), "pos": meta.get("pos"), "team": meta.get("team"),
+                                   "delta": delta, "points": pts, "game": meta.get("game"),
+                                   "mine": mine_in.get(k, []), "opp": opp_in.get(k, []), "ts": now})
+    events = [e for e in events if now - e.get("ts", 0) < EVENT_TTL] + new_events
+    for e in events:
+        age_min = (now - e.get("ts", now)) / 60
+        feed.append({"kind": "score", "score": 82 + min(abs(e["delta"]), 15) - age_min * 3, **e})
+
+    # 3. Matchups — close + live floats up, decided/dormant sinks.
+    for m in results:
+        me, opp = m.get("me") or {}, m.get("opp") or {}
+        live_players = (me.get("in_play") or 0) + (opp.get("in_play") or 0)
+        margin = abs((me.get("points") or 0) - (opp.get("points") or 0))
+        remaining = (me.get("proj_remaining") or 0) + (opp.get("proj_remaining") or 0) + live_players * 8
+        if m.get("error"):
+            score = 0
+        elif live_players > 0:
+            closeness = max(0.0, 1 - margin / max(remaining, 1.0))
+            score = 50 + 25 * closeness + min(live_players, 10)
+        elif (me.get("yet_to_play") or 0) + (opp.get("yet_to_play") or 0) > 0:
+            score = 20 + max(0.0, 8 - margin / 5)      # undecided, nobody on the field yet
+        else:
+            score = 5                                   # done for the week
+        feed.append({"kind": "matchup", "score": round(score, 1), "platform": m["platform"], "league_id": m["league_id"],
+                     "live_players": live_players, "margin": round(margin, 1)})
+
+    # 4. Conflicts — interesting while those players are on the field.
+    conflicts = extras.get("conflicts") or []
+    if conflicts:
+        live_c = [c for c in conflicts if (c.get("game") or {}).get("state") == "in"]
+        feed.append({"kind": "conflicts", "score": 45 if live_c else 12, "live": len(live_c)})
+
+    # 5. Leaderboards — always there, never first.
+    if (extras.get("top") or {}).get("mine") or (extras.get("top") or {}).get("opp"):
+        feed.append({"kind": "top", "score": 15})
+
+    feed.sort(key=lambda x: -x["score"])
+    return feed, {k: v for k, v in snapshot.items() if not k.startswith("meta|")} | {k: v for k, v in snapshot.items() if k.startswith("meta|")}, events
+
+
 def build_live(uid: str, leagues: list[dict], season: int = 2026) -> dict:
     week = current_nfl_week()
 
@@ -296,9 +384,15 @@ def build_live(uid: str, leagues: list[dict], season: int = 2026) -> dict:
     conn = get_connection()
     try:
         status = fetch_game_status(conn)
+        extras = aggregate(results, status)
+        prev, events = _load_events(conn, uid)
+        now = datetime.now(timezone.utc).timestamp()
+        feed, snapshot, events = build_feed(results, status, extras, prev, events, now)
+        _cache_set(conn, f"live://snap/{uid}", snapshot)
+        _cache_set(conn, f"live://events/{uid}", events)
     finally:
         conn.close()
-    extras = aggregate(results, status)
+    extras["feed"] = feed
     counts: dict[str, int] = {}
     seen_games = set()
     for ab, g in status.items():
