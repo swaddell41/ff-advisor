@@ -105,7 +105,7 @@ def live_sleeper(league_id: str, week: int, user_id: str, season: int = 2026) ->
         users = {u["user_id"]: u for u in client.get_league_users(league_id)}
         rosters = client.get_league_rosters(league_id, ttl=LIVE_ROSTER_TTL)
         matchups = client.get_matchups(league_id, week, ttl=MATCHUP_TTL)
-        all_players = client.get_all_players()
+        all_players = client.get_players_slim()
         values = fetch_auction_values(conn, season)
         xwalk = _sleeper_to_espn(conn)
         dst = _dst_espn_id_by_abbrev()

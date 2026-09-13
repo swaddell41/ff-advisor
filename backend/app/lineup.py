@@ -201,7 +201,7 @@ def lineup_sleeper(league_id: str, season: int, user_id: str, roster_id: int | N
         league = client.get_league(league_id)
         rosters = client.get_league_rosters(league_id, ttl=LIVE_ROSTER_TTL)
         users = {u["user_id"]: u for u in client.get_league_users(league_id)}
-        all_players = client.get_all_players()
+        all_players = client.get_players_slim()
 
         mine = None
         for r in rosters:

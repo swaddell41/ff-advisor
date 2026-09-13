@@ -32,6 +32,14 @@ CACHE_TTL_SECONDS = 3600          # 1 hour — for rosters, current-week data
 PLAYERS_TTL_SECONDS = 86400
 REQUEST_DELAY_SECONDS = 0.05       # polite rate limiting
 
+# Process-level memo over the DB cache. On Vercel a warm function instance
+# serves many requests; without this every request re-read cached blobs
+# (the 16 MB players list, per league, per poll) out of Postgres — which
+# burned through Neon's data-transfer quota in an afternoon. Memo hits
+# never touch the database.
+_MEMO: dict[str, tuple[float, Any]] = {}
+FANTASY_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DEF"}
+
 
 class SleeperClient:
     """
@@ -106,6 +114,29 @@ class SleeperClient:
         """
         return self._get("/v1/players/nfl", ttl=PLAYERS_TTL_SECONDS)
 
+    def get_players_slim(self) -> dict[str, dict]:
+        """
+        Fantasy-relevant players only, five fields each — the live tools'
+        lookup table. ~1/20th of /v1/players/nfl; derived once a day and
+        memoized, so a poll never drags the full blob out of the database.
+        """
+        key = "sleeper://players/slim"
+        memo = _MEMO.get(key)
+        if memo and time.time() - memo[0] <= PLAYERS_TTL_SECONDS:
+            return memo[1]
+        slim = self._cache_get(key, PLAYERS_TTL_SECONDS)
+        if slim is None:
+            full = self.get_all_players()
+            slim = {
+                pid: {"first_name": m.get("first_name"), "last_name": m.get("last_name"),
+                      "position": m.get("position"), "team": m.get("team"),
+                      "injury_status": m.get("injury_status")}
+                for pid, m in full.items() if m.get("position") in FANTASY_POSITIONS
+            }
+            self._cache_set(key, slim)
+        _MEMO[key] = (time.time(), slim)
+        return slim
+
     def get_user_by_username(self, username: str) -> dict:
         """GET /v1/user/{username}"""
         return self._get(f"/v1/user/{username}", ttl=CACHE_TTL_SECONDS)
@@ -122,9 +153,13 @@ class SleeperClient:
         ttl=N   means re-fetch if the cached entry is older than N seconds.
         """
         url = BASE_URL + path
+        memo = _MEMO.get(url)
+        if memo and (ttl is None or time.time() - memo[0] <= ttl):
+            return memo[1]
         cached = self._cache_get(url, ttl)
         if cached is not None:
             logger.debug("Cache hit: %s", url)
+            _MEMO[url] = (time.time(), cached)
             return cached
 
         logger.debug("Cache miss, fetching: %s", url)
@@ -135,6 +170,7 @@ class SleeperClient:
         data = resp.json()
 
         self._cache_set(url, data)
+        _MEMO[url] = (time.time(), data)
         return data
 
     def _cache_get(self, url: str, ttl: int | None) -> Any | None:

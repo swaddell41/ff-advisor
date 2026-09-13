@@ -65,7 +65,17 @@ SLOT_ELIGIBILITY = {
 }
 
 
+# Process-level memo over sleeper_cache reads (see ingestion/sleeper.py):
+# warm instances must not re-read the same cached sheets out of Postgres
+# on every request.
+_MEMO: dict[str, tuple[float, Any]] = {}
+
+
 def _cache_get(conn, key: str, ttl: int) -> Any | None:
+    import time as _t
+    memo = _MEMO.get(key)
+    if memo and _t.time() - memo[0] <= ttl:
+        return memo[1]
     row = conn.execute(
         "SELECT response_json, fetched_at FROM sleeper_cache WHERE url = ?", (key,)
     ).fetchone()
@@ -76,15 +86,19 @@ def _cache_get(conn, key: str, ttl: int) -> Any | None:
         fetched = fetched.replace(tzinfo=timezone.utc)
     if (datetime.now(timezone.utc) - fetched).total_seconds() > ttl:
         return None
-    return json.loads(row[0])
+    data = json.loads(row[0])
+    _MEMO[key] = (fetched.timestamp(), data)
+    return data
 
 
 def _cache_set(conn, key: str, data: Any) -> None:
+    import time as _t
     conn.execute(
         "INSERT OR REPLACE INTO sleeper_cache (url, response_json, fetched_at) VALUES (?, ?, ?)",
         (key, json.dumps(data), datetime.now(timezone.utc).isoformat()),
     )
     conn.commit()
+    _MEMO[key] = (_t.time(), data)
 
 
 def fetch_auction_values(conn, season: int) -> dict:
@@ -212,10 +226,17 @@ def _market_values(conn, fmt: str) -> dict[str, float]:
 
 
 def _sleeper_to_espn(conn) -> dict[str, str]:
-    return {
+    """sleeper_id -> espn_id crosswalk (6k rows); memoized per process for a day."""
+    import time as _t
+    memo = _MEMO.get("xwalk://sleeper-espn")
+    if memo and _t.time() - memo[0] <= 86400:
+        return memo[1]
+    out = {
         str(r[0]): str(r[1])
         for r in conn.execute("SELECT sleeper_id, espn_id FROM player_ids").fetchall()
     }
+    _MEMO["xwalk://sleeper-espn"] = (_t.time(), out)
+    return out
 
 
 def _dst_espn_id_by_abbrev() -> dict[str, str]:
