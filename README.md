@@ -75,28 +75,12 @@ Open [http://localhost:5173](http://localhost:5173).
 
 ---
 
-## Project Structure
+## Project structure
 
-```
-backend/
-  app/
-    main.py           — FastAPI app
-    db.py             — SQLite connection + schema
-    ingestion/        — Sleeper + RosterAudit API clients
-    grading/          — Trade evaluation logic (Phase 2)
-    profiles/         — Manager profile aggregations (Phase 3)
-    api/              — FastAPI route handlers
-  scripts/
-    ingest_leagues.py — Manual ingestion entry point
-    snapshot_values.py — Weekly value snapshot
-  tests/              — pytest tests
-frontend/
-  src/                — React + TypeScript (Vite)
-data/
-  dynasty.db          — SQLite database (gitignored)
-```
-
----
+- `backend/app/` — FastAPI. `api/` routers; engines: `acquire.py`, `sell.py`, `deals.py`, `profiles/`, `grading/` (dynasty), `redraft.py`, `lineup.py`, `waivers.py`, `live.py`, `home.py` (redraft hub), `draftboard.py` (extension board), `ingestion/` (Sleeper, RosterAudit, FantasyCalc, DynastyProcess). `db.py` is a dual backend: SQLite locally, Postgres (Neon) when `DATABASE_URL` is set.
+- `frontend/` — Vite + React SPA (see `frontend/README.md`).
+- `extension/` — MV3 draft assistant; `node extension/<name>-test.js` runs a suite (`make ext-test` runs them all).
+- `api/index.py` + `vercel.json` — the Vercel serverless entry (rewrites `/api/*` to FastAPI, SPA fallback for everything else, daily cron at `/api/cron/daily`).
 
 ## Scripts
 

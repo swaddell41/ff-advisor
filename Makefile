@@ -1,4 +1,4 @@
-.PHONY: setup backend frontend ingest snapshot test backfill-rosters
+.PHONY: setup backend frontend ingest snapshot test backfill-rosters ext-test
 
 # Detect Python: prefer pyenv 3.12, fall back to system python3
 PYTHON := $(shell \
@@ -46,3 +46,7 @@ backfill-rosters:
 # Run the test suite
 test:
 	cd backend && $(PYTHON) -m pytest -v
+
+# Run the Chrome extension's offline test suites
+ext-test:
+	cd extension && for t in *-test.js; do node "$$t" > /dev/null && echo "PASS $$t" || echo "FAIL $$t"; done
