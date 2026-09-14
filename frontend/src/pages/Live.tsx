@@ -90,7 +90,7 @@ export default function Live() {
           <span className={cn('inline-block w-1.5 h-1.5 rounded-full shrink-0', DOT[p.game.state])} title={p.game.detail} />
           <span className="text-muted-foreground w-8 shrink-0 truncate" title={p.slot}>{SLOT_SHORT[p.slot] || p.slot}</span>
           <span className="flex-1 min-w-0 truncate" title={`${p.name} · ${p.team}`}>{p.name} <span className="text-muted-foreground">{p.team}</span></span>
-          <span className={cn('text-muted-foreground tabular-nums shrink-0 text-right', p.game.state === 'in' ? 'w-[7.5rem]' : 'w-14')} title={p.game.detail}>
+          <span className={cn('text-muted-foreground tabular-nums shrink-0 text-right whitespace-nowrap', p.game.state === 'in' ? 'w-[7.5rem]' : 'w-16')} title={p.game.detail}>
             {p.game.state === 'pre' ? `${p.proj.toFixed(1)} proj`
               : p.game.state === 'bye' ? 'bye'
               : p.game.state === 'in' ? <>{fmtDetail(p.game.detail)}{p.proj_live != null && <span className="text-emerald-400"> →{p.proj_live.toFixed(1)}</span>}</>
@@ -106,7 +106,7 @@ export default function Live() {
     const key = `${m.platform}:${m.league_id}`
     const lead = m.me && m.opp ? m.me.points - m.opp.points : 0
     return (
-      <div key={key} className={cn('rounded-xl border bg-card p-4 space-y-3', liveCount > 0 ? 'border-emerald-500/30' : 'border-border')}>
+      <div key={key} className={cn('@container rounded-xl border bg-card p-4 space-y-3', liveCount > 0 ? 'border-emerald-500/30' : 'border-border')}>
         <div className="flex items-center justify-between">
           <div className="text-sm font-medium">{m.league}</div>
           <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -127,7 +127,7 @@ export default function Live() {
               {open === key ? 'hide starters' : 'show starters'}
             </button>
             {open === key && (
-              <div className="grid sm:grid-cols-2 gap-4 pt-1 border-t border-border">
+              <div className="grid @lg:grid-cols-2 gap-4 pt-1 border-t border-border">
                 <div><div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">You</div>{roster(m.me)}</div>
                 <div><div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Opponent</div>{roster(m.opp)}</div>
               </div>
