@@ -318,9 +318,12 @@ export default function Live() {
   }
   const groups = new Map<FeedItem['kind'], FeedItem[]>()
   for (const f of feed) groups.set(f.kind, [...(groups.get(f.kind) || []), f])
+  // Section order is fixed and predictable — urgent kinds first — while
+  // items inside each section stay ranked by salience.
+  const SECTION_ORDER: FeedItem['kind'][] = ['redzone', 'score', 'matchup', 'conflicts', 'top']
   const sections = [...groups.entries()]
     .map(([kind, items]) => ({ kind, items, score: Math.max(...items.map((x) => x.score)) }))
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => SECTION_ORDER.indexOf(a.kind) - SECTION_ORDER.indexOf(b.kind))
 
   const renderSection = (sec: { kind: FeedItem['kind']; items: FeedItem[] }, si: number) => {
     const meta = SECTION[sec.kind]
@@ -374,7 +377,7 @@ export default function Live() {
         <div className="text-sm text-muted-foreground">No in-season leagues yet — load one from <Link to="/lineup" className="underline underline-offset-2">Start/Sit</Link>.</div>
       )}
       <div className="text-xs text-muted-foreground pt-2">
-        Ordered by what matters now: red-zone drives, scoring plays since the last refresh (kept 20 min), close matchups with players on the field, then the rest.
+        Sections always run red zone → just happened → matchups → conflicts → leaderboards; within each, the hottest items first (scoring plays kept 20 min, matchups closest first).
         Dots: <span className="text-emerald-400">●</span> playing · <span className="text-amber-400">●</span> yet to play · <span>●</span> final · <span className="text-red-400">●</span> bye.
       </div>
     </div>

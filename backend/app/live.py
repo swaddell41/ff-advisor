@@ -458,7 +458,9 @@ def build_feed(results: list[dict], status: dict, extras: dict, prev: dict, even
             delta = round(pts - float(before), 1)
             if abs(delta) >= EVENT_MIN_DELTA:
                 meta = snapshot.get(f"meta|{k}") or {}
-                why = describe_delta(prev_stats.get(k), stats_now.get(k)) if k in stats_now else ""
+                # Only describe when we hold the player's stat line from the
+                # previous poll — otherwise the "diff" would be his whole game.
+                why = describe_delta(prev_stats[k], stats_now[k]) if (k in stats_now and k in prev_stats) else ""
                 play = match_last_play(status, meta.get("team") or "", meta.get("name") or "")
                 new_events.append({"key": k, "name": meta.get("name"), "pos": meta.get("pos"), "team": meta.get("team"),
                                    "delta": delta, "points": pts, "game": meta.get("game"),

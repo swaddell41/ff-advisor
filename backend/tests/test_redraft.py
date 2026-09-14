@@ -279,3 +279,26 @@ def test_describe_delta_and_last_play_match():
     assert match_last_play(status, "NYG", "George Pickens") is not None
     assert match_last_play(status, "NYG", "Cam Skattebo") is None
     assert match_last_play(status, "DAL", "George Pickens") is None
+
+
+def test_feed_attributes_bursts_from_stat_diff():
+    from app.live import build_feed
+    g_in = {"state": "in", "detail": "Q4 7:00"}
+    res = [{"platform": "sleeper", "league_id": "1", "league": "L",
+            "me": {"points": 50.0, "proj_remaining": 5.0, "in_play": 1, "yet_to_play": 0,
+                   "starters": [{"sid": "77", "name": "George Pickens", "pos": "WR", "team": "DAL", "points": 18.2, "game": g_in}]},
+            "opp": {"points": 40.0, "proj_remaining": 0.0, "in_play": 0, "yet_to_play": 0, "starters": []}}]
+    extras = {"red_zone": {"mine": [], "opp": []}, "conflicts": [], "top": {"mine": [], "opp": []}}
+    prev = {"George Pickens|WR": 10.0}
+    prev_stats = {"George Pickens|WR": {"rec": 3, "rec_yd": 41}}
+    live_stats = {"77": {"rec": 4, "rec_yd": 64, "rec_td": 1}}
+    status = {"DAL": {"state": "in", "last_play": {"text": "J.Dart pass to G.Pickens for 23 yards, TOUCHDOWN.", "athletes": ["George Pickens"], "score_value": 6}}}
+    feed, _, events, stats_now = build_feed(res, status, extras, prev, [], 1000.0, prev_stats, live_stats)
+    ev = [f for f in feed if f["kind"] == "score"][0]
+    assert ev["delta"] == 8.2
+    assert ev["why"] == "1 TD catch · +23 rec yds · +1 rec"
+    assert "TOUCHDOWN" in ev["play"]
+    assert stats_now["George Pickens|WR"] == {"rec": 4, "rec_yd": 64, "rec_td": 1}
+    # First sighting of a player's stat line: no fabricated whole-game "diff".
+    feed2, _, _, _ = build_feed(res, status, extras, prev, [], 1000.0, {}, live_stats)
+    assert [f for f in feed2 if f["kind"] == "score"][0]["why"] == ""
