@@ -75,6 +75,64 @@ function verdict(m: Matchup): Verdict {
   return null
 }
 
+// How much a matchup still hangs on the next points: 0 once decided, 1 when
+// live and dead even, a sliver when "likely" but not certain.
+function liveness(m: Matchup): number {
+  if (!m.me || !m.opp) return 0
+  const v = verdict(m)
+  if (v && (v.label === 'won' || v.label === 'lost' || v.label === 'tied')) return 0
+  const remaining = m.me.proj_remaining + m.opp.proj_remaining
+  if (remaining <= 0) return 0
+  const margin = Math.abs(m.me.points - m.opp.points)
+  const w = Math.max(0, Math.min(1, 1 - margin / (remaining + 1)))
+  return v ? Math.min(w, 0.25) : w   // likely win/loss: still alive, barely
+}
+
+type Rooting = {
+  c: Conflict
+  forW: number; againstW: number
+  forLeagues: { league: string; margin: number }[]
+  againstLeagues: { league: string; margin: number }[]
+  remaining: number          // projection still to come for this player
+  lean: 'for' | 'against' | 'torn' | 'moot'
+  score: number
+}
+function analyzeRooting(conflicts: Conflict[], matchups: Matchup[]): Rooting[] {
+  const byLeague = new Map(matchups.map((m) => [m.league, m]))
+  return conflicts.map((c) => {
+    const side = (leagues: string[]) => leagues.map((league) => {
+      const m = byLeague.get(league)
+      const w = m ? liveness(m) : 0
+      const margin = m && m.me && m.opp ? m.me.points - m.opp.points : 0
+      return { league, w, margin }
+    })
+    const F = side(c.have_in), A = side(c.face_in)
+    const forW = F.reduce((t, x) => t + x.w, 0), againstW = A.reduce((t, x) => t + x.w, 0)
+    let remaining = 0
+    for (const m of matchups) {
+      for (const st of [...(m.me?.starters || []), ...(m.opp?.starters || [])]) {
+        if (st.name === c.name && st.proj_live != null) remaining = Math.max(remaining, st.proj_live - st.points)
+      }
+    }
+    const done = c.game?.state === 'post' || c.game?.state === 'bye'
+    const both = Math.min(forW, againstW)
+    let lean: Rooting['lean'] = 'moot'
+    if (!done && both > 0.1) {
+      const r = forW / (forW + againstW)
+      lean = r > 0.65 ? 'for' : r < 0.35 ? 'against' : 'torn'
+    } else if (!done && (forW > 0.1 || againstW > 0.1)) {
+      lean = forW > againstW ? 'for' : 'against'
+    }
+    return {
+      c, forW, againstW,
+      forLeagues: F.filter((x) => x.w > 0).map(({ league, margin }) => ({ league, margin })),
+      againstLeagues: A.filter((x) => x.w > 0).map(({ league, margin }) => ({ league, margin })),
+      remaining, lean,
+      score: (lean === 'torn' ? 2 : lean === 'moot' ? 0 : 1) * (both + 0.05) * (remaining + 1),
+    }
+  }).sort((a, b) => b.score - a.score)
+}
+
 export default function Live() {
   const [data, setData] = useState<LiveData | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -268,24 +326,65 @@ export default function Live() {
         const m = byKey.get(`${f.platform}:${f.league_id}`)
         return m ? matchupCard(m, f.live_players, isClose(f)) : null
       }
-      case 'conflicts':
-        return (
-          <div key={`cf${i}`} className="rounded-xl border border-border bg-card p-4">
-            <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2">Conflicted rooting{f.live > 0 ? <span className="text-emerald-400"> · {f.live} playing now</span> : ''}</div>
-            <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1">
-              {(data?.conflicts || []).map((c, j) => (
-                <div key={j} className="text-sm py-0.5">
-                  <div className="flex items-center gap-2">
-                    <span className={cn('inline-block w-1.5 h-1.5 rounded-full shrink-0', DOT[(c.game?.state as Starter['game']['state']) || 'pre'])} />
-                    <span className="truncate">{c.name} <span className="text-xs text-muted-foreground">{c.pos} · {c.team}</span></span>
-                    <span className="ml-auto tabular-nums font-medium">{c.points.toFixed(1)}</span>
-                  </div>
-                  <div className="text-[11px] text-muted-foreground pl-3.5">yours in {c.have_in.join(', ')} · against you in {c.face_in.join(', ')}</div>
-                </div>
-              ))}
+      case 'conflicts': {
+        const rooting = analyzeRooting(data?.conflicts || [], data?.matchups || [])
+        const torn = rooting.filter((r) => r.lean === 'torn')
+        const leaning = rooting.filter((r) => r.lean === 'for' || r.lean === 'against')
+        const moot = rooting.filter((r) => r.lean === 'moot')
+        const chips = (rows: { league: string; margin: number }[], tone: string) => rows.map((x, k) => (
+          <span key={k} className={cn('rounded-full border px-1.5 py-0 text-[10px] tabular-nums', tone)}>
+            {x.league.replace(/ est\. \d{4}$/, '')} {x.margin > 0 ? '+' : ''}{x.margin.toFixed(1)}
+          </span>
+        ))
+        const row = (r: Rooting) => (
+          <div key={r.c.name} className="py-1.5 border-b border-border/60 last:border-b-0">
+            <div className="flex items-center gap-2 text-sm">
+              <span className={cn('inline-block w-1.5 h-1.5 rounded-full shrink-0', DOT[(r.c.game?.state as Starter['game']['state']) || 'pre'])} />
+              <span className="truncate">{r.c.name} <span className="text-xs text-muted-foreground">{r.c.pos} · {r.c.team}</span></span>
+              <span className="ml-auto shrink-0 flex items-center gap-2">
+                {r.remaining > 0 && <span className="text-[10px] text-muted-foreground tabular-nums">{r.remaining.toFixed(1)} left</span>}
+                <span className={cn('rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider',
+                  r.lean === 'torn' ? 'border-amber-500/60 bg-amber-500/10 text-amber-400'
+                  : r.lean === 'for' ? 'border-emerald-500/50 text-emerald-400'
+                  : r.lean === 'against' ? 'border-red-500/50 text-red-400' : 'border-border text-muted-foreground')}>
+                  {r.lean === 'torn' ? 'torn' : r.lean === 'for' ? 'root for' : r.lean === 'against' ? 'root against' : 'moot'}
+                </span>
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-1 pl-3.5 mt-1">
+              <span className="text-[10px] text-emerald-400/80 mr-0.5">for</span>{chips(r.forLeagues, 'border-emerald-500/30 text-emerald-300/90')}
+              {r.forLeagues.length === 0 && <span className="text-[10px] text-muted-foreground">—</span>}
+              <span className="text-[10px] text-red-400/80 ml-2 mr-0.5">against</span>{chips(r.againstLeagues, 'border-red-500/30 text-red-300/90')}
+              {r.againstLeagues.length === 0 && <span className="text-[10px] text-muted-foreground">—</span>}
             </div>
           </div>
         )
+        return (
+          <div key={`cf${i}`} className="rounded-xl border border-border bg-card p-4 space-y-4">
+            <div>
+              <div className="text-[11px] uppercase tracking-wider text-amber-400 mb-1">Genuinely torn · {torn.length}</div>
+              <div className="text-xs text-muted-foreground mb-1">Still swings an undecided matchup on both sides. Margins shown are yours in each league.</div>
+              {torn.length === 0 ? <div className="text-xs text-muted-foreground">Nobody right now — every conflict leans one way or is already settled.</div> : torn.map(row)}
+            </div>
+            {leaning.length > 0 && (
+              <div>
+                <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">Leaning · {leaning.length}</div>
+                <div className="text-xs text-muted-foreground mb-1">Live on both sides, but one side clearly outweighs the other.</div>
+                {leaning.slice(0, 6).map(row)}
+                {leaning.length > 6 && <div className="text-xs text-muted-foreground pt-1">+{leaning.length - 6} more leaning the same ways</div>}
+              </div>
+            )}
+            {moot.length > 0 && (
+              <details className="text-xs text-muted-foreground">
+                <summary className="cursor-pointer">{moot.length} more don't matter — the matchup on one side is decided, or the game is over</summary>
+                <div className="pt-2 flex flex-wrap gap-x-3 gap-y-1">
+                  {moot.map((r) => <span key={r.c.name}>{r.c.name} <span className="opacity-60">{r.c.pos}</span></span>)}
+                </div>
+              </details>
+            )}
+          </div>
+        )
+      }
       case 'top':
         return (
           <div key={`top${i}`} className="grid md:grid-cols-2 gap-3">
@@ -313,7 +412,7 @@ export default function Live() {
       },
       accent: 'text-foreground border-border',
     },
-    conflicts: { label: 'Conflicted rooting', caption: (it) => { const f = it[0]; return f.kind === 'conflicts' && f.live > 0 ? `${f.live} of these players are on the field right now` : 'players you start in one league and face in another' }, accent: 'text-muted-foreground border-border' },
+    conflicts: { label: 'Conflicted rooting', caption: () => 'only the players who still swing an undecided matchup on both sides — the rest are collapsed', accent: 'text-muted-foreground border-border' },
     top: { label: 'Leaderboards', caption: () => 'best per player across all your leagues, yours vs against you', accent: 'text-muted-foreground border-border' },
   }
   const groups = new Map<FeedItem['kind'], FeedItem[]>()
