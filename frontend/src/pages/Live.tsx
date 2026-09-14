@@ -33,6 +33,18 @@ interface LiveData {
   red_zone?: { mine: RZ[]; opp: RZ[] }; top?: { mine: Agg[]; opp: Agg[] }; conflicts?: Conflict[]; feed?: FeedItem[]
 }
 
+// ESPN's "14:20 - 4th" / "End of 3rd" / "Halftime" → "Q4 14:20" / "End Q3" / "Half".
+const fmtDetail = (d: string) => {
+  const m = d.match(/^(\d+:\d+) - (\d)(?:st|nd|rd|th)$/)
+  if (m) return `Q${m[2]} ${m[1]}`
+  const e = d.match(/^End of (\d)/)
+  if (e) return `End Q${e[1]}`
+  if (/half/i.test(d)) return 'Half'
+  if (/^Final/.test(d)) return d.replace('Final/OT', 'F/OT')
+  return d
+}
+const SLOT_SHORT: Record<string, string> = { SUPER_FLEX: 'SF', WRRB_FLEX: 'W/R', REC_FLEX: 'W/T' }
+
 const DOT: Record<Starter['game']['state'], string> = { in: 'bg-emerald-400', post: 'bg-muted-foreground', pre: 'bg-amber-400', bye: 'bg-red-400' }
 
 export default function Live() {
@@ -76,9 +88,14 @@ export default function Live() {
       {s.starters.map((p, i) => (
         <div key={i} className="flex items-center gap-2 text-xs">
           <span className={cn('inline-block w-1.5 h-1.5 rounded-full shrink-0', DOT[p.game.state])} title={p.game.detail} />
-          <span className="text-muted-foreground w-9 shrink-0">{p.slot}</span>
-          <span className="truncate">{p.name} <span className="text-muted-foreground">{p.team}</span></span>
-          <span className="ml-auto text-muted-foreground tabular-nums shrink-0">{p.game.state === 'pre' ? `${p.proj.toFixed(1)} proj` : p.game.state === 'bye' ? 'bye' : p.game.state === 'in' && p.proj_live != null ? `${p.game.detail} · → ${p.proj_live.toFixed(1)}` : p.game.detail}</span>
+          <span className="text-muted-foreground w-8 shrink-0 truncate" title={p.slot}>{SLOT_SHORT[p.slot] || p.slot}</span>
+          <span className="flex-1 min-w-0 truncate" title={`${p.name} · ${p.team}`}>{p.name} <span className="text-muted-foreground">{p.team}</span></span>
+          <span className={cn('text-muted-foreground tabular-nums shrink-0 text-right', p.game.state === 'in' ? 'w-[7.5rem]' : 'w-14')} title={p.game.detail}>
+            {p.game.state === 'pre' ? `${p.proj.toFixed(1)} proj`
+              : p.game.state === 'bye' ? 'bye'
+              : p.game.state === 'in' ? <>{fmtDetail(p.game.detail)}{p.proj_live != null && <span className="text-emerald-400"> →{p.proj_live.toFixed(1)}</span>}</>
+              : fmtDetail(p.game.detail)}
+          </span>
           <span className="w-10 text-right tabular-nums font-medium shrink-0">{p.points.toFixed(1)}</span>
         </div>
       ))}
