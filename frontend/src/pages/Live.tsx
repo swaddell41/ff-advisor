@@ -138,13 +138,25 @@ export default function Live() {
             {m.scoreboard.length > 0 && (
               <div className="pt-2 border-t border-border">
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Around the league</div>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px] text-muted-foreground">
-                  {m.scoreboard.map((g, i) => (
-                    <div key={i} className="flex justify-between gap-2 tabular-nums">
-                      <span className="truncate">{g.a.name} <span className="text-foreground">{g.a.points.toFixed(1)}</span></span>
-                      <span className="truncate text-right"><span className="text-foreground">{g.b.points.toFixed(1)}</span> {g.b.name}</span>
-                    </div>
-                  ))}
+                <div className="grid @3xl:grid-cols-2 gap-x-8 gap-y-0.5">
+                  {m.scoreboard.map((g, i) => {
+                    const mine = !!m.me && (g.a.name === m.me.name || g.b.name === m.me.name)
+                    const aLead = g.a.points > g.b.points
+                    const bLead = g.b.points > g.a.points
+                    return (
+                      <div
+                        key={i}
+                        className={cn('grid items-center gap-2 text-[11px] leading-5 rounded px-1 -mx-1', mine ? 'bg-muted/40 text-foreground' : 'text-muted-foreground')}
+                        style={{ gridTemplateColumns: 'minmax(0,1fr) 2.75rem 0.5rem 2.75rem minmax(0,1fr)' }}
+                      >
+                        <span className={cn('truncate text-right', aLead && 'text-foreground')} title={g.a.name}>{g.a.name}</span>
+                        <span className={cn('text-right tabular-nums', aLead ? 'text-foreground font-medium' : '')}>{g.a.points.toFixed(1)}</span>
+                        <span className="text-center text-muted-foreground/50">–</span>
+                        <span className={cn('text-left tabular-nums', bLead ? 'text-foreground font-medium' : '')}>{g.b.points.toFixed(1)}</span>
+                        <span className={cn('truncate', bLead && 'text-foreground')} title={g.b.name}>{g.b.name}</span>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )}
