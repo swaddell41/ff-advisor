@@ -127,7 +127,7 @@ export default function Live() {
               {open === key ? 'hide starters' : 'show starters'}
             </button>
             {open === key && (
-              <div className="grid @lg:grid-cols-2 gap-4 pt-1 border-t border-border">
+              <div className="grid @3xl:grid-cols-2 gap-4 pt-1 border-t border-border">
                 <div><div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">You</div>{roster(m.me)}</div>
                 <div><div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Opponent</div>{roster(m.opp)}</div>
               </div>
