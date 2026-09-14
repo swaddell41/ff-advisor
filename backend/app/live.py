@@ -40,7 +40,7 @@ MATCHUP_TTL = 20
 
 def fetch_game_status(conn) -> dict[str, dict]:
     """team abbrev -> {state: pre|in|post, detail, opp} from ESPN's scoreboard."""
-    key = "scoreboard://status/v2"
+    key = "scoreboard://status/v3"
     cached = _cache_get(conn, key, STATUS_TTL)
     if cached is not None:
         return cached
@@ -50,9 +50,13 @@ def fetch_game_status(conn) -> dict[str, dict]:
         resp.raise_for_status()
         for ev in resp.json().get("events") or []:
             comp = (ev.get("competitions") or [{}])[0]
-            st = (ev.get("status") or {}).get("type") or {}
+            status_obj = ev.get("status") or {}
+            st = status_obj.get("type") or {}
             state = st.get("state") or "pre"
             detail = st.get("shortDetail") or ""
+            period = int(status_obj.get("period") or 0)
+            clock = str(status_obj.get("displayClock") or "")
+            frac = frac_remaining(state, period, clock, detail)
             sit = comp.get("situation") or {}
             poss_id = str(sit.get("possession") or "")
             red_zone = bool(sit.get("isRedZone"))
@@ -65,6 +69,7 @@ def fetch_game_status(conn) -> dict[str, dict]:
                 has_ball = state == "in" and poss_id and cid == poss_id
                 out[ab] = {"state": state, "detail": detail, "opp": opp,
                            "score": score, "opp_score": teams[1 - i][1] if len(teams) == 2 else None,
+                           "period": period, "clock": clock, "frac_remaining": frac,
                            "possession": bool(has_ball),
                            "red_zone": bool(has_ball and red_zone),
                            "situation": sit.get("downDistanceText") or ""}
@@ -75,20 +80,62 @@ def fetch_game_status(conn) -> dict[str, dict]:
     return out
 
 
+def frac_remaining(state: str, period: int, clock: str, detail: str = "") -> float:
+    """
+    Share of the game still to be played, for scaling a player's projection:
+    pre 1.0 · post 0.0 · in-progress from quarter + clock (halftime 0.5,
+    overtime a sliver). Regulation = 4 × 15 min.
+    """
+    if state == "pre":
+        return 1.0
+    if state == "post":
+        return 0.0
+    d = (detail or "").lower()
+    if "half" in d:
+        return 0.5
+    if period >= 5 or "ot" in d.split():
+        return 0.08
+    try:
+        mm, ss = clock.split(":")
+        secs = int(mm) * 60 + int(ss)
+    except Exception:
+        secs = 0
+    if period <= 0:
+        return 1.0
+    remaining = max(0, 4 - period) * 900 + secs
+    return round(min(1.0, max(0.0, remaining / 3600)), 3)
+
+
 def _game(status: dict, team: str) -> dict:
     g = status.get(team)
     if not g:
-        return {"state": "bye", "detail": "bye"}
-    return {"state": g["state"], "detail": g["detail"]}
+        return {"state": "bye", "detail": "bye", "frac": 0.0}
+    frac = g.get("frac_remaining")
+    if frac is None:
+        frac = 1.0 if g["state"] == "pre" else 0.5 if g["state"] == "in" else 0.0
+    return {"state": g["state"], "detail": g["detail"], "frac": frac}
+
+
+def _remaining(s: dict) -> float:
+    """Projection still on the table for one starter: full before kickoff,
+    scaled by game clock while playing, nothing when final/bye."""
+    g = s["game"]
+    if g["state"] == "pre":
+        return float(s["proj"])
+    if g["state"] == "in":
+        return float(s["proj"]) * float(g.get("frac", 0.5))
+    return 0.0
 
 
 def _side(name: str, owner: str, starters: list[dict], total: float | None = None) -> dict:
     pts = round(sum(s["points"] for s in starters), 2) if total is None else round(float(total), 2)
+    for s in starters:
+        s["proj_live"] = round(float(s["points"]) + _remaining(s), 1)
     return {
         "name": name,
         "owner": owner,
         "points": pts,
-        "proj_remaining": round(sum(s["proj"] for s in starters if s["game"]["state"] == "pre"), 1),
+        "proj_remaining": round(sum(_remaining(s) for s in starters), 1),
         "yet_to_play": sum(1 for s in starters if s["game"]["state"] == "pre"),
         "in_play": sum(1 for s in starters if s["game"]["state"] == "in"),
         "starters": starters,
@@ -337,7 +384,7 @@ def build_feed(results: list[dict], status: dict, extras: dict, prev: dict, even
         me, opp = m.get("me") or {}, m.get("opp") or {}
         live_players = (me.get("in_play") or 0) + (opp.get("in_play") or 0)
         margin = abs((me.get("points") or 0) - (opp.get("points") or 0))
-        remaining = (me.get("proj_remaining") or 0) + (opp.get("proj_remaining") or 0) + live_players * 8
+        remaining = (me.get("proj_remaining") or 0) + (opp.get("proj_remaining") or 0)
         if m.get("error"):
             score = 0
         elif live_players > 0:

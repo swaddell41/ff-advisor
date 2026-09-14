@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
 
 const POLL_MS = 30_000
 
-interface Starter { name: string; pos: string; slot: string; team: string; points: number; proj: number; game: { state: 'pre' | 'in' | 'post' | 'bye'; detail: string } }
+interface Starter { name: string; pos: string; slot: string; team: string; points: number; proj: number; proj_live?: number; game: { state: 'pre' | 'in' | 'post' | 'bye'; detail: string; frac?: number } }
 interface Side { name: string; owner?: string; points: number; proj_remaining: number; starters: Starter[]; yet_to_play: number; in_play: number }
 interface Matchup {
   platform: 'sleeper' | 'espn'; league_id: string; league: string; week: number
@@ -78,7 +78,7 @@ export default function Live() {
           <span className={cn('inline-block w-1.5 h-1.5 rounded-full shrink-0', DOT[p.game.state])} title={p.game.detail} />
           <span className="text-muted-foreground w-9 shrink-0">{p.slot}</span>
           <span className="truncate">{p.name} <span className="text-muted-foreground">{p.team}</span></span>
-          <span className="ml-auto text-muted-foreground tabular-nums shrink-0">{p.game.state === 'pre' ? `${p.proj.toFixed(1)} proj` : p.game.state === 'bye' ? 'bye' : p.game.detail}</span>
+          <span className="ml-auto text-muted-foreground tabular-nums shrink-0">{p.game.state === 'pre' ? `${p.proj.toFixed(1)} proj` : p.game.state === 'bye' ? 'bye' : p.game.state === 'in' && p.proj_live != null ? `${p.game.detail} · → ${p.proj_live.toFixed(1)}` : p.game.detail}</span>
           <span className="w-10 text-right tabular-nums font-medium shrink-0">{p.points.toFixed(1)}</span>
         </div>
       ))}

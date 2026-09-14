@@ -196,7 +196,10 @@ def test_live_side_summary():
     ]
     s = _side("Me", "me", starters)
     assert s["points"] == 21.4
-    assert s["proj_remaining"] == 9.0          # only the 'pre' starter counts
+    # 'pre' starter counts in full (9.0); the in-play starter with no clock
+    # info counts half (20.0 * 0.5 = 10.0); final and bye count nothing.
+    assert s["proj_remaining"] == 19.0
+    assert starters[0]["proj_live"] == 22.4     # 12.4 so far + half of 20.0
     assert s["in_play"] == 1 and s["yet_to_play"] == 1
     assert starters[2]["game"]["state"] == "bye"
     assert _side("Opp", "", starters, total=30.5)["points"] == 30.5   # platform total wins when given
@@ -253,3 +256,13 @@ def test_live_feed_ranks_by_salience():
     assert kinds[-1] == ("matchup", "2")                      # a decided blowout sinks below the leaderboards
     assert [k[0] for k in kinds].index("top") < len(kinds) - 1
     assert snap["Jef|WR"] == 18.2 and len(events) == 1
+
+
+def test_frac_remaining_from_clock():
+    from app.live import frac_remaining
+    assert frac_remaining("pre", 0, "") == 1.0
+    assert frac_remaining("post", 4, "0:00") == 0.0
+    assert frac_remaining("in", 3, "7:04") == round((900 + 424) / 3600, 3)   # Q3 7:04 -> ~0.368
+    assert frac_remaining("in", 1, "15:00") == 1.0
+    assert frac_remaining("in", 2, "0:00", "Halftime") == 0.5
+    assert frac_remaining("in", 5, "10:00", "OT") == 0.08
