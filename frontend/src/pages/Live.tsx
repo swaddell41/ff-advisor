@@ -72,7 +72,9 @@ export default function Live() {
   const live = data?.games.find((g) => g.state === 'in')?.count || 0
   const byKey = new Map((data?.matchups || []).map((m) => [`${m.platform}:${m.league_id}`, m]))
   const feed = data?.feed || []
-  const closeLive = feed.filter((f) => f.kind === 'matchup' && (f as any).live_players > 0 && (f as any).margin < 15).length
+  const isClose = (f: FeedItem) => f.kind === 'matchup' && f.live_players > 0 && f.margin < 15
+  const closeNames = feed.filter(isClose).map((f) => byKey.get(`${(f as any).platform}:${(f as any).league_id}`)?.league).filter(Boolean) as string[]
+  const closeLive = closeNames.length
   const bursts = feed.filter((f) => f.kind === 'score').length
 
   const side = (s: Side | null, mine: boolean) => s ? (
@@ -102,14 +104,15 @@ export default function Live() {
     </div>
   ) : null
 
-  const matchupCard = (m: Matchup, liveCount: number) => {
+  const matchupCard = (m: Matchup, liveCount: number, close = false) => {
     const key = `${m.platform}:${m.league_id}`
     const lead = m.me && m.opp ? m.me.points - m.opp.points : 0
     return (
-      <div key={key} className={cn('@container rounded-xl border bg-card p-4 space-y-3', liveCount > 0 ? 'border-emerald-500/30' : 'border-border')}>
+      <div key={key} className={cn('@container rounded-xl border bg-card p-4 space-y-3', close ? 'border-amber-500/50' : liveCount > 0 ? 'border-emerald-500/30' : 'border-border')}>
         <div className="flex items-center justify-between">
           <div className="text-sm font-medium">{m.league}</div>
           <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+            {close && <span className="rounded-full border border-amber-500/50 bg-amber-500/10 text-amber-400 px-2 py-0.5">close</span>}
             {liveCount > 0 && <span className="text-emerald-400">● {liveCount} on the field</span>}
             <span>{m.platform}</span>
           </div>
@@ -202,7 +205,7 @@ export default function Live() {
       }
       case 'matchup': {
         const m = byKey.get(`${f.platform}:${f.league_id}`)
-        return m ? matchupCard(m, f.live_players) : null
+        return m ? matchupCard(m, f.live_players, isClose(f)) : null
       }
       case 'conflicts':
         return (
@@ -286,7 +289,7 @@ export default function Live() {
             {data ? (
               <>
                 Week {data.week} · {live > 0 ? <span className="text-emerald-400">{live} game{live === 1 ? '' : 's'} in progress</span> : 'no games in progress'}
-                {closeLive > 0 && <> · <span className="text-amber-400">{closeLive} close matchup{closeLive === 1 ? '' : 's'}</span></>}
+                {closeLive > 0 && <> · <span className="text-amber-400" title={closeNames.join(' · ')}>{closeLive} close matchup{closeLive === 1 ? '' : 's'}</span> <span className="text-muted-foreground">({closeNames.join(', ')})</span></>}
                 {bursts > 0 && <> · {bursts} scoring play{bursts === 1 ? '' : 's'} in the last 20 min</>}
                 {' · '}updated {new Date(data.updated).toLocaleTimeString()}
               </>
