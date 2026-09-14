@@ -219,17 +219,50 @@ export default function Live() {
     }
   }
 
-  // Matchups are rendered two-up when adjacent in the feed so the page stays dense.
-  const rows: FeedItem[][] = []
-  for (const f of feed) {
-    const last = rows[rows.length - 1]
-    if (f.kind === 'matchup' && last && last.length === 1 && last[0].kind === 'matchup') last.push(f)
-    else rows.push([f])
+  // Sections: group the ranked feed by kind, order sections by their hottest
+  // item, keep items ranked inside. Clear breaks, still dynamic.
+  const SECTION: Record<FeedItem['kind'], { label: string; caption: (items: FeedItem[]) => string; accent: string }> = {
+    redzone: { label: 'Red zone', caption: () => 'drives inside the 20 involving your players or your opponents\'', accent: 'text-red-400 border-red-500/40' },
+    score: { label: 'Just happened', caption: (it) => `${it.length} scoring play${it.length === 1 ? '' : 's'} in the last 20 minutes · newest and biggest first`, accent: 'text-emerald-400 border-emerald-500/40' },
+    matchup: {
+      label: 'Your matchups',
+      caption: (it) => {
+        const liveN = it.filter((f) => f.kind === 'matchup' && f.live_players > 0).length
+        return liveN > 0 ? `${liveN} with players on the field · closest first, decided games last` : 'closest first · decided games last'
+      },
+      accent: 'text-foreground border-border',
+    },
+    conflicts: { label: 'Conflicted rooting', caption: (it) => { const f = it[0]; return f.kind === 'conflicts' && f.live > 0 ? `${f.live} of these players are on the field right now` : 'players you start in one league and face in another' }, accent: 'text-muted-foreground border-border' },
+    top: { label: 'Leaderboards', caption: () => 'best per player across all your leagues, yours vs against you', accent: 'text-muted-foreground border-border' },
+  }
+  const groups = new Map<FeedItem['kind'], FeedItem[]>()
+  for (const f of feed) groups.set(f.kind, [...(groups.get(f.kind) || []), f])
+  const sections = [...groups.entries()]
+    .map(([kind, items]) => ({ kind, items, score: Math.max(...items.map((x) => x.score)) }))
+    .sort((a, b) => b.score - a.score)
+
+  const renderSection = (sec: { kind: FeedItem['kind']; items: FeedItem[] }, si: number) => {
+    const meta = SECTION[sec.kind]
+    const body = sec.kind === 'matchup'
+      ? <div className="grid md:grid-cols-2 gap-3">{sec.items.map((f, j) => renderItem(f, si * 100 + j))}</div>
+      : <div className="space-y-3">{sec.items.map((f, j) => renderItem(f, si * 100 + j))}</div>
+    return (
+      <section key={sec.kind} className={cn('pt-5 border-t', si === 0 ? 'border-transparent pt-0' : 'border-border')}>
+        <div className="flex items-baseline justify-between gap-3 mb-3">
+          <div className="flex items-baseline gap-3">
+            <h2 className={cn('text-[11px] font-semibold uppercase tracking-wider', meta.accent.split(' ')[0])}>{meta.label}</h2>
+            <span className="text-xs text-muted-foreground">{meta.caption(sec.items)}</span>
+          </div>
+          {sec.items.length > 1 && sec.kind !== 'top' && <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{sec.items.length}</span>}
+        </div>
+        {body}
+      </section>
+    )
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-end justify-between gap-4 pb-1">
+    <div className="space-y-6">
+      <div className="flex items-end justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold">Live</h1>
           <div className="text-sm text-muted-foreground">
@@ -248,9 +281,7 @@ export default function Live() {
 
       {error && <div className="text-sm text-red-400">{error}</div>}
 
-      {rows.map((row, i) => row.length === 2
-        ? <div key={i} className="grid md:grid-cols-2 gap-3">{row.map((f, j) => renderItem(f, i * 10 + j))}</div>
-        : <div key={i}>{renderItem(row[0], i * 10)}</div>)}
+      {sections.map((sec, i) => renderSection(sec, i))}
 
       {data && data.matchups.length === 0 && (
         <div className="text-sm text-muted-foreground">No in-season leagues yet — load one from <Link to="/lineup" className="underline underline-offset-2">Start/Sit</Link>.</div>
