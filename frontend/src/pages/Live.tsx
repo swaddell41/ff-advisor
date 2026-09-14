@@ -24,7 +24,7 @@ interface RZ { name: string; pos: string; team: string; league: string; situatio
 interface Conflict extends Agg { have_in: string[]; face_in: string[] }
 type FeedItem =
   | { kind: 'redzone'; score: number; mine: RZ[]; opp: RZ[] }
-  | { kind: 'score'; score: number; name: string; pos: string; team: string; delta: number; points: number; game?: { state: string; detail: string }; mine: string[]; opp: string[]; ts: number }
+  | { kind: 'score'; score: number; name: string; pos: string; team: string; delta: number; points: number; game?: { state: string; detail: string }; mine: string[]; opp: string[]; ts: number; why?: string; play?: string | null }
   | { kind: 'matchup'; score: number; platform: string; league_id: string; live_players: number; margin: number }
   | { kind: 'conflicts'; score: number; live: number }
   | { kind: 'top'; score: number }
@@ -248,6 +248,12 @@ export default function Live() {
             </div>
             <div className="min-w-0">
               <div className="text-sm font-medium truncate">{f.name} <span className="text-xs text-muted-foreground">{f.pos} · {f.team}{f.game?.detail ? ` · ${f.game.detail}` : ''} · now {f.points.toFixed(1)}</span></div>
+              {(f.why || f.play) && (
+                <div className="text-xs">
+                  {f.why && <span className="text-foreground">{f.why}</span>}
+                  {f.play && <span className="text-muted-foreground italic">{f.why ? ' — ' : ''}“{f.play}”</span>}
+                </div>
+              )}
               <div className="text-[11px] text-muted-foreground">
                 {good && <span className="text-emerald-400">yours in {f.mine.join(', ')}</span>}
                 {good && bad && ' · '}

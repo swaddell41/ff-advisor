@@ -40,7 +40,7 @@ MATCHUP_TTL = 20
 
 def fetch_game_status(conn) -> dict[str, dict]:
     """team abbrev -> {state: pre|in|post, detail, opp} from ESPN's scoreboard."""
-    key = "scoreboard://status/v3"
+    key = "scoreboard://status/v4"
     cached = _cache_get(conn, key, STATUS_TTL)
     if cached is not None:
         return cached
@@ -60,6 +60,13 @@ def fetch_game_status(conn) -> dict[str, dict]:
             sit = comp.get("situation") or {}
             poss_id = str(sit.get("possession") or "")
             red_zone = bool(sit.get("isRedZone"))
+            lp = sit.get("lastPlay") or {}
+            last_play = {
+                "text": lp.get("text") or "",
+                "type": ((lp.get("type") or {}).get("text")) or "",
+                "score_value": int(lp.get("scoreValue") or 0),
+                "athletes": [((a.get("athlete") or {}).get("displayName") or "") for a in (lp.get("athletesInvolved") or [])],
+            } if lp else None
             teams = []
             for c in comp.get("competitors") or []:
                 ab = ((c.get("team") or {}).get("abbreviation") or "").upper()
@@ -70,6 +77,7 @@ def fetch_game_status(conn) -> dict[str, dict]:
                 out[ab] = {"state": state, "detail": detail, "opp": opp,
                            "score": score, "opp_score": teams[1 - i][1] if len(teams) == 2 else None,
                            "period": period, "clock": clock, "frac_remaining": frac,
+                           "last_play": last_play,
                            "possession": bool(has_ball),
                            "red_zone": bool(has_ball and red_zone),
                            "situation": sit.get("downDistanceText") or ""}
@@ -78,6 +86,74 @@ def fetch_game_status(conn) -> dict[str, dict]:
     except Exception:
         pass
     return out
+
+
+STAT_KEYS = ("pass_yd", "pass_td", "pass_int", "rush_yd", "rush_td", "rec", "rec_yd", "rec_td",
+             "fum_lost", "pass_2pt", "rush_2pt", "rec_2pt", "fgm", "xpm", "def_td", "sack", "int", "fum_rec")
+_STATS_MEMO: dict[str, tuple[float, dict]] = {}
+
+
+def fetch_live_stats(season: int, week: int) -> dict[str, dict]:
+    """sleeper player_id -> live stat line (STAT_KEYS only). In-process memo,
+    25s — never written to the database (it's a per-poll feed)."""
+    import time as _t
+    key = f"{season}/{week}"
+    memo = _STATS_MEMO.get(key)
+    if memo and _t.time() - memo[0] <= 25:
+        return memo[1]
+    out: dict[str, dict] = {}
+    try:
+        resp = requests.get(
+            f"https://api.sleeper.app/stats/nfl/{season}/{week}?season_type=regular"
+            "&position[]=QB&position[]=RB&position[]=WR&position[]=TE&position[]=K&position[]=DEF",
+            timeout=15,
+        )
+        resp.raise_for_status()
+        for row in resp.json() or []:
+            st = row.get("stats") or {}
+            out[str(row.get("player_id"))] = {k: float(st[k]) for k in STAT_KEYS if st.get(k)}
+        _STATS_MEMO[key] = (_t.time(), out)
+    except Exception:
+        pass
+    return out
+
+
+def describe_delta(prev: dict | None, cur: dict | None) -> str:
+    """'TD catch · +23 rec yds · +2 rec' from two stat lines."""
+    if cur is None:
+        return ""
+    prev = prev or {}
+    d = {k: cur.get(k, 0.0) - prev.get(k, 0.0) for k in STAT_KEYS}
+    parts: list[str] = []
+    n = lambda x: int(round(x))
+    if d["rec_td"] > 0: parts.append(f"{n(d['rec_td'])} TD catch" + ("es" if d["rec_td"] > 1 else ""))
+    if d["rush_td"] > 0: parts.append(f"{n(d['rush_td'])} rush TD" + ("s" if d["rush_td"] > 1 else ""))
+    if d["pass_td"] > 0: parts.append(f"{n(d['pass_td'])} pass TD" + ("s" if d["pass_td"] > 1 else ""))
+    if d["def_td"] > 0: parts.append("defensive TD")
+    for k in ("pass_2pt", "rush_2pt", "rec_2pt"):
+        if d[k] > 0: parts.append("2-pt conversion"); break
+    if d["fgm"] > 0: parts.append(f"{n(d['fgm'])} FG" + ("s" if d["fgm"] > 1 else ""))
+    if d["xpm"] > 0: parts.append(f"{n(d['xpm'])} XP")
+    for k, label in (("rec_yd", "rec yds"), ("rush_yd", "rush yds"), ("pass_yd", "pass yds")):
+        if abs(d[k]) >= 1: parts.append(f"{'+' if d[k] > 0 else ''}{n(d[k])} {label}")
+    if d["rec"] > 0: parts.append(f"+{n(d['rec'])} rec")
+    if d["sack"] > 0: parts.append(f"{n(d['sack'])} sack" + ("s" if d["sack"] > 1 else ""))
+    if d["int"] > 0: parts.append(f"{n(d['int'])} INT")
+    if d["fum_rec"] > 0: parts.append("fumble recovery")
+    if d["fum_lost"] > 0: parts.append("fumble lost")
+    if d["pass_int"] > 0: parts.append("INT thrown")
+    return " · ".join(parts)
+
+
+def match_last_play(status: dict, team: str, name: str) -> str | None:
+    """ESPN's last play for the player's game, if it names the player."""
+    g = status.get(team) or {}
+    lp = g.get("last_play")
+    if not lp or not lp.get("text"):
+        return None
+    last = name.split()[-1].lower().rstrip(".")
+    hay = (lp["text"] + " " + " ".join(lp.get("athletes") or [])).lower()
+    return lp["text"] if last and last in hay else None
 
 
 def frac_remaining(state: str, period: int, clock: str, detail: str = "") -> float:
@@ -180,6 +256,7 @@ def live_sleeper(league_id: str, week: int, user_id: str, season: int = 2026) ->
                 pos = meta.get("position") or (v or {}).get("pos") or "?"
                 name = (v or {}).get("name") or f"{meta.get('first_name', '')} {meta.get('last_name', '')}".strip() or str(sid)
                 rows.append({
+                    "sid": str(sid),
                     "name": name, "pos": "DST" if pos == "DEF" else pos,
                     "slot": slots[i] if i < len(slots) else "?",
                     "team": team,
@@ -219,6 +296,8 @@ def live_espn(league_id: str, week: int, team_id: int, season: int = 2026, name:
     try:
         values = fetch_auction_values(conn, season)
         status = fetch_game_status(conn)
+        rev = {v: k for k, v in _sleeper_to_espn(conn).items()}
+        rev.update({v: k for k, v in _dst_espn_id_by_abbrev().items()})
         url = (f"{LM_API}/seasons/{season}/segments/0/leagues/{league_id}"
                f"?view=mMatchupScore&view=mBoxscore&view=mTeam&scoringPeriodId={week}")
         resp = requests.get(url, cookies=_espn_cookies(), timeout=20)
@@ -242,6 +321,7 @@ def live_espn(league_id: str, week: int, team_id: int, season: int = 2026, name:
                 v = values.get(eid)
                 team = PRO_TEAM.get(p.get("proTeamId"), (v or {}).get("team") or "")
                 rows.append({
+                    "sid": rev.get(eid),
                     "name": p.get("fullName") or eid,
                     "pos": (v or {}).get("pos") or ESPN_POS.get(p.get("defaultPositionId"), "?"),
                     "slot": "DEF" if slot == "DEF" else slot,
@@ -327,13 +407,15 @@ EVENT_TTL = 20 * 60        # a scoring burst stays in the feed this long, fading
 EVENT_MIN_DELTA = 2.0      # points jump between polls that counts as "something happened"
 
 
-def _load_events(conn, uid: str) -> tuple[dict, list]:
+def _load_events(conn, uid: str) -> tuple[dict, list, dict]:
     prev = _cache_get(conn, f"live://snap/{uid}", EVENT_TTL) or {}
     events = _cache_get(conn, f"live://events/{uid}", EVENT_TTL) or []
-    return prev, events
+    prev_stats = _cache_get(conn, f"live://stats/{uid}", EVENT_TTL) or {}
+    return prev, events, prev_stats
 
 
-def build_feed(results: list[dict], status: dict, extras: dict, prev: dict, events: list, now: float) -> tuple[list[dict], dict, list]:
+def build_feed(results: list[dict], status: dict, extras: dict, prev: dict, events: list, now: float,
+               prev_stats: dict | None = None, live_stats: dict | None = None) -> tuple[list[dict], dict, list, dict]:
     """
     Rank everything on the page by how much it matters RIGHT NOW.
     Returns (feed items sorted by score desc, new points snapshot, event log).
@@ -344,6 +426,9 @@ def build_feed(results: list[dict], status: dict, extras: dict, prev: dict, even
     mine_in: dict[str, list[str]] = {}
     opp_in: dict[str, list[str]] = {}
     snapshot: dict[str, float] = {}
+    stats_now: dict[str, dict] = {}
+    prev_stats = prev_stats or {}
+    live_stats = live_stats or {}
     for m in results:
         lg = m.get("league") or ""
         for side, book in ((m.get("me"), mine_in), (m.get("opp"), opp_in)):
@@ -352,6 +437,8 @@ def build_feed(results: list[dict], status: dict, extras: dict, prev: dict, even
                 book.setdefault(k, []).append(lg)
                 snapshot[k] = max(snapshot.get(k, 0.0), float(st["points"]))
                 snapshot.setdefault(f"meta|{k}", {"name": st["name"], "pos": st["pos"], "team": st["team"], "game": st["game"]})  # type: ignore[arg-type]
+                if st.get("sid") and st["sid"] in live_stats:
+                    stats_now[k] = live_stats[st["sid"]]
 
     # 1. Red zone — top of the page whenever it's live.
     rz = extras.get("red_zone") or {}
@@ -371,8 +458,11 @@ def build_feed(results: list[dict], status: dict, extras: dict, prev: dict, even
             delta = round(pts - float(before), 1)
             if abs(delta) >= EVENT_MIN_DELTA:
                 meta = snapshot.get(f"meta|{k}") or {}
+                why = describe_delta(prev_stats.get(k), stats_now.get(k)) if k in stats_now else ""
+                play = match_last_play(status, meta.get("team") or "", meta.get("name") or "")
                 new_events.append({"key": k, "name": meta.get("name"), "pos": meta.get("pos"), "team": meta.get("team"),
                                    "delta": delta, "points": pts, "game": meta.get("game"),
+                                   "why": why, "play": play,
                                    "mine": mine_in.get(k, []), "opp": opp_in.get(k, []), "ts": now})
     events = [e for e in events if now - e.get("ts", 0) < EVENT_TTL] + new_events
     for e in events:
@@ -408,7 +498,7 @@ def build_feed(results: list[dict], status: dict, extras: dict, prev: dict, even
         feed.append({"kind": "top", "score": 15})
 
     feed.sort(key=lambda x: -x["score"])
-    return feed, {k: v for k, v in snapshot.items() if not k.startswith("meta|")} | {k: v for k, v in snapshot.items() if k.startswith("meta|")}, events
+    return feed, snapshot, events, stats_now
 
 
 def build_live(uid: str, leagues: list[dict], season: int = 2026) -> dict:
@@ -432,11 +522,13 @@ def build_live(uid: str, leagues: list[dict], season: int = 2026) -> dict:
     try:
         status = fetch_game_status(conn)
         extras = aggregate(results, status)
-        prev, events = _load_events(conn, uid)
+        prev, events, prev_stats = _load_events(conn, uid)
         now = datetime.now(timezone.utc).timestamp()
-        feed, snapshot, events = build_feed(results, status, extras, prev, events, now)
+        live_stats = fetch_live_stats(season, week)
+        feed, snapshot, events, stats_now = build_feed(results, status, extras, prev, events, now, prev_stats, live_stats)
         _cache_set(conn, f"live://snap/{uid}", snapshot)
         _cache_set(conn, f"live://events/{uid}", events)
+        _cache_set(conn, f"live://stats/{uid}", stats_now)
     finally:
         conn.close()
     extras["feed"] = feed

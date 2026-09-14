@@ -247,7 +247,7 @@ def test_live_feed_ranks_by_salience():
                "opp": {"points": 0.0, "proj_remaining": 95.0, "in_play": 0, "yet_to_play": 9, "starters": []}}
     extras = {"red_zone": {"mine": [{"name": "Jef"}], "opp": []}, "conflicts": [], "top": {"mine": [{"name": "Jef"}], "opp": []}}
     prev = {"Jef|WR": 11.0}   # Jef just went +7.2 since the last poll
-    feed, snap, events = build_feed([close, blowout, dormant], {}, extras, prev, [], now=1000.0)
+    feed, snap, events, _ = build_feed([close, blowout, dormant], {}, extras, prev, [], now=1000.0)
     kinds = [(f["kind"], f.get("league_id")) for f in feed]
     assert kinds[0][0] == "redzone"
     assert kinds[1][0] == "score" and feed[1]["delta"] == 7.2 and feed[1]["mine"] == ["Close"]
@@ -266,3 +266,16 @@ def test_frac_remaining_from_clock():
     assert frac_remaining("in", 1, "15:00") == 1.0
     assert frac_remaining("in", 2, "0:00", "Halftime") == 0.5
     assert frac_remaining("in", 5, "10:00", "OT") == 0.08
+
+
+def test_describe_delta_and_last_play_match():
+    from app.live import describe_delta, match_last_play
+    before = {"rec": 3, "rec_yd": 41, "rec_td": 0}
+    after = {"rec": 4, "rec_yd": 64, "rec_td": 1}
+    assert describe_delta(before, after) == "1 TD catch · +23 rec yds · +1 rec"
+    assert describe_delta({}, {"pass_yd": 45, "pass_int": 1}) == "+45 pass yds · INT thrown"
+    assert describe_delta(None, None) == ""
+    status = {"NYG": {"last_play": {"text": "J.Dart pass short right to G.Pickens for 23 yards, TOUCHDOWN.", "athletes": ["George Pickens"], "score_value": 6}}}
+    assert match_last_play(status, "NYG", "George Pickens") is not None
+    assert match_last_play(status, "NYG", "Cam Skattebo") is None
+    assert match_last_play(status, "DAL", "George Pickens") is None
