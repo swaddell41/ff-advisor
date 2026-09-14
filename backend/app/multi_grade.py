@@ -25,6 +25,7 @@ from __future__ import annotations
 from datetime import date
 from sqlite3 import Connection
 
+from app.clock import utc_today
 from app.grading.engine import _parse_trade_date, assign_letter_grade
 from app.pick_conversion import PickResolutionContext
 
@@ -188,7 +189,7 @@ def lens_grades(
     ).fetchone()
     fmt = (league_row["format_key"] if league_row else None) or "sf_ppr"
     trade_date = _parse_trade_date(trade_row["executed_at"])
-    today = date.today()
+    today = utc_today()
 
     if resolver is None:
         resolver = PickResolutionContext(conn, trade_row["league_id"])

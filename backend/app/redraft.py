@@ -22,7 +22,6 @@ the league — strengths and weaknesses in one sheet.
 """
 
 import json
-import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -30,7 +29,6 @@ import requests
 
 from app.db import get_connection
 
-logger = logging.getLogger(__name__)
 
 TRENDS_URL = (
     "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}"
@@ -99,6 +97,9 @@ def _cache_set(conn, key: str, data: Any) -> None:
     )
     conn.commit()
     _MEMO[key] = (_t.time(), data)
+    if len(_MEMO) > 500:  # bounded: drop the oldest half
+        for k in sorted(_MEMO, key=lambda k: _MEMO[k][0])[: len(_MEMO) // 2]:
+            _MEMO.pop(k, None)
 
 
 def fetch_auction_values(conn, season: int) -> dict:
@@ -243,6 +244,22 @@ def _dst_espn_id_by_abbrev() -> dict[str, str]:
     return {abbr: str(-(16000 + tid)) for tid, abbr in PRO_TEAM.items()}
 
 
+_XWALK_MEMO: dict[str, tuple[float, dict]] = {}
+
+
+def _espn_to_sleeper(conn) -> dict[str, str]:
+    """espn_id -> sleeper_id (crosswalk + DSTs by abbreviation), memoized an
+    hour — inverting a 6k-row map on every request was waste."""
+    import time as _t
+    memo = _XWALK_MEMO.get("rev")
+    if memo and _t.time() - memo[0] <= 3600:
+        return memo[1]
+    rev = {v: k for k, v in _sleeper_to_espn(conn).items()}
+    rev.update({v: k for k, v in _dst_espn_id_by_abbrev().items()})
+    _XWALK_MEMO["rev"] = (_t.time(), rev)
+    return rev
+
+
 def optimal_lineup(players: list[dict], slots: list[str]) -> tuple[list[dict], list[dict]]:
     """
     Fill the league's starting slots greedily by AAV: every player (value
@@ -345,7 +362,7 @@ def evaluate_sleeper(league_id: str, season: int, method: str = "auction") -> di
         league = client.get_league(league_id)
         users = {u["user_id"]: u for u in client.get_league_users(league_id)}
         rosters = client.get_league_rosters(league_id)
-        all_players = client.get_all_players()
+        all_players = client.get_players_slim()
         slots = [s for s in (league.get("roster_positions") or []) if s != "BN"]
         price = _make_pricer(conn, values, method, slots)
 
@@ -389,27 +406,15 @@ ESPN_SLOT = {
 
 
 def evaluate_espn(league_id: str, season: int, method: str = "auction") -> dict:
-    from app.api.espn import _espn_cookies, LM_API
+    from app.api.espn import espn_slots, fetch_espn_league
 
     conn = get_connection()
     try:
         values = fetch_auction_values(conn, season)
-        espn_to_sleeper = {v: k for k, v in _sleeper_to_espn(conn).items()}
-        espn_to_sleeper.update({v: k for k, v in _dst_espn_id_by_abbrev().items()})
-        url = (
-            f"{LM_API}/seasons/{season}/segments/0/leagues/{league_id}"
-            "?view=mSettings&view=mTeam&view=mRoster"
-        )
-        resp = requests.get(url, cookies=_espn_cookies(), timeout=20)
-        resp.raise_for_status()
-        data = resp.json()
+        espn_to_sleeper = _espn_to_sleeper(conn)
+        data = fetch_espn_league(league_id, season, "view=mSettings&view=mTeam&view=mRoster")
         settings = data.get("settings") or {}
-        slot_counts = (settings.get("rosterSettings") or {}).get("lineupSlotCounts") or {}
-        slots: list[str] = []
-        for sid, n in slot_counts.items():
-            token = ESPN_SLOT.get(int(sid))
-            if token:
-                slots.extend([token] * int(n))
+        slots = espn_slots(settings)
         price = _make_pricer(conn, values, method, slots)
 
         teams = []

@@ -29,6 +29,7 @@ import logging
 from datetime import date, datetime
 from sqlite3 import Connection
 
+from app.clock import utc_today
 from app.value_sources import RosterAuditValueSource
 from app.profiles.engine import get_league_family_ids
 
@@ -190,11 +191,11 @@ class PickResolutionContext:
 
 def _parse_trade_date(executed_at: str | None) -> date:
     if not executed_at:
-        return date.today()
+        return utc_today()
     try:
         return datetime.fromisoformat(executed_at).date()
     except (ValueError, TypeError):
-        return date.today()
+        return utc_today()
 
 
 def _summarise(entries: list[dict]) -> dict:

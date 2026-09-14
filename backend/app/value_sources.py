@@ -162,26 +162,3 @@ class RosterAuditValueSource:
 # above (get_player_value / get_pick_value signatures) and be registered
 # in VALUE_SOURCES dict in rosteraudit.py so it can be selected per-league.
 #
-class KTCValueSource:
-    """
-    Stub — NOT IMPLEMENTED.
-    See module docstring for rationale.
-    """
-
-    SOURCE = "ktc"
-
-    def __init__(self, conn: Connection) -> None:
-        raise NotImplementedError(
-            "KTCValueSource is not yet implemented. "
-            "Use RosterAuditValueSource for now."
-        )
-
-    def get_player_value(
-        self, sleeper_id: str, fmt: str, as_of: date
-    ) -> tuple[int | None, bool]:
-        raise NotImplementedError
-
-    def get_pick_value(
-        self, season: int, round: int, fmt: str, as_of: date
-    ) -> tuple[int | None, bool]:
-        raise NotImplementedError

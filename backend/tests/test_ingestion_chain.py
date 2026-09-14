@@ -13,7 +13,6 @@ Covers:
 
 import json
 import sqlite3
-from unittest.mock import MagicMock, patch
 
 import pytest
 import responses as resp_lib

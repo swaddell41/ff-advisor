@@ -30,10 +30,12 @@ Leagues on traditional waiver priority get a "use your priority / wait for
 free agency" verdict instead of a dollar figure.
 """
 
+import logging
 import requests
 
 from app.db import get_connection
 from app.lineup import (
+
     LIVE_ROSTER_TTL,
     blend,
     current_nfl_week,
@@ -48,10 +50,13 @@ from app.redraft import (
     _cache_get,
     _cache_set,
     _dst_espn_id_by_abbrev,
+    _espn_to_sleeper,
     _sleeper_to_espn,
     fetch_auction_values,
     optimal_lineup,
 )
+
+logger = logging.getLogger(__name__)
 
 TREND_TTL = 3600
 STREAMERS = {"K", "DST"}
@@ -75,7 +80,7 @@ def fetch_trending(conn) -> dict[str, dict]:
         if out:
             _cache_set(conn, key, out)
     except Exception:
-        pass
+        logger.warning("soft failure", exc_info=True)
     return out
 
 
@@ -257,9 +262,8 @@ def waivers_sleeper(league_id: str, season: int, user_id: str, roster_id: int | 
         week = current_nfl_week()
         values = fetch_auction_values(conn, season)
         xwalk = _sleeper_to_espn(conn)
-        rev = {v: k for k, v in xwalk.items()}
+        rev = _espn_to_sleeper(conn)
         dst = _dst_espn_id_by_abbrev()
-        rev.update({v: k for k, v in dst.items()})
         client = SleeperClient(conn)
         league = client.get_league(league_id)
         rosters = client.get_league_rosters(league_id, ttl=LIVE_ROSTER_TTL)
@@ -315,30 +319,19 @@ def waivers_sleeper(league_id: str, season: int, user_id: str, roster_id: int | 
 
 
 def waivers_espn(league_id: str, season: int, team_id: int) -> dict:
-    from app.api.espn import LM_API, _espn_cookies
+    from app.api.espn import espn_slots, fetch_espn_league
 
     conn = get_connection()
     try:
         week = current_nfl_week()
         values = fetch_auction_values(conn, season)
-        xwalk = _sleeper_to_espn(conn)
-        rev = {v: k for k, v in xwalk.items()}
-        rev.update({v: k for k, v in _dst_espn_id_by_abbrev().items()})
+        rev = _espn_to_sleeper(conn)
         trending = fetch_trending(conn)
         vegas = fetch_vegas(conn, week)
         sproj = fetch_sleeper_projections(conn, season, week)
-        url = (f"{LM_API}/seasons/{season}/segments/0/leagues/{league_id}"
-               "?view=mSettings&view=mTeam&view=mRoster")
-        resp = requests.get(url, cookies=_espn_cookies(), timeout=20)
-        resp.raise_for_status()
-        data = resp.json()
+        data = fetch_espn_league(league_id, season, "view=mSettings&view=mTeam&view=mRoster")
         settings = data.get("settings") or {}
-        slot_counts = (settings.get("rosterSettings") or {}).get("lineupSlotCounts") or {}
-        slots: list[str] = []
-        for sid, n in slot_counts.items():
-            token = ESPN_SLOT.get(int(sid))
-            if token:
-                slots.extend([token] * int(n))
+        slots = espn_slots(settings)
         acq = settings.get("acquisitionSettings") or {}
         team = next((t for t in data.get("teams") or [] if t.get("id") == team_id), None)
         if team is None:

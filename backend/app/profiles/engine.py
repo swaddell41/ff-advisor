@@ -66,6 +66,8 @@ AGE_BUCKETS = [
 SEASON_DECAY = {0: 1.0, 1: 0.75, 2: 0.5}
 SEASON_DECAY_FLOOR = 0.3
 
+from app.clock import utc_today
+
 
 def _season_weight(season: int | None, current: int) -> float:
     if season is None:
@@ -459,7 +461,7 @@ def compute_age_biases(trades: list[dict]) -> dict:
             continue
         d_pct = _pct(t["d_diff"], t["d_received"], t["d_given"])
         w = _season_weight(t.get("season"), current)
-        trade_date = _parse_date(t["executed_at"]) or date.today()
+        trade_date = _parse_date(t["executed_at"]) or utc_today()
 
         received_buckets = set()
         for a in t["assets_received"]:

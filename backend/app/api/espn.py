@@ -21,10 +21,14 @@ response> serves that file instead of calling ESPN.
 import json
 import os
 
+import logging
 import requests
 from fastapi import APIRouter, HTTPException
 
 from app.api.me import _require_user_id
+
+logger = logging.getLogger(__name__)
+
 
 router = APIRouter()
 
@@ -43,6 +47,25 @@ def _espn_cookies() -> dict:
     if not swid.startswith("{"):
         swid = "{" + swid.strip("{}") + "}"
     return {"espn_s2": s2, "SWID": swid}
+
+
+def fetch_espn_league(league_id: str, season: int, views: str) -> dict:
+    """Raw league payload for the given views, with the configured cookies."""
+    url = f"{LM_API}/seasons/{season}/segments/0/leagues/{league_id}?{views}"
+    resp = requests.get(url, cookies=_espn_cookies(), timeout=20)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def espn_slots(settings: dict) -> list[str]:
+    """Starting-slot tokens from ESPN lineupSlotCounts."""
+    from app.redraft import ESPN_SLOT
+    slots: list[str] = []
+    for sid, n in ((settings.get("rosterSettings") or {}).get("lineupSlotCounts") or {}).items():
+        token = ESPN_SLOT.get(int(sid))
+        if token:
+            slots.extend([token] * int(n))
+    return slots
 
 
 def _fetch_league(league_id: str, season: int) -> dict:
@@ -188,5 +211,5 @@ def discover_espn_leagues(conn, season: int) -> list[dict]:
                                 "team_id": team_id, "season": season})
         _cache_set(conn, key, out)
     except Exception:
-        pass
+        logger.warning("soft failure", exc_info=True)
     return out

@@ -14,11 +14,15 @@ Per league (computed in parallel, each one failing soft):
     into a buy / sell / hold / reassess nudge with the reasoning.
 """
 
+import logging
 from concurrent.futures import ThreadPoolExecutor
 
 from app.db import get_connection
 from app.lineup import LIVE_ROSTER_TTL, current_nfl_week, lineup_espn, lineup_sleeper
 from app.waivers import waivers_espn, waivers_sleeper
+
+logger = logging.getLogger(__name__)
+
 
 SLEEPER_TYPE = {0: "redraft", 1: "keeper", 2: "dynasty"}
 

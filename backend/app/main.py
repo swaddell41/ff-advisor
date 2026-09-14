@@ -1,10 +1,6 @@
-"""
-FastAPI application entry point.
-
-Phase 1: health check only.
-Phase 2 will add /api/leagues, /api/trades, and grading routes.
-Phase 3 will add /api/managers and scouting report routes.
-"""
+"""FastAPI app: session middleware, schema init on startup, and the routers
+for dynasty (leagues/managers/me), draft (espn/draftboard), and the redraft
+hub (redraft/lineup/waivers/home/live)."""
 
 from __future__ import annotations
 

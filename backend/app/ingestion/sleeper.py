@@ -17,7 +17,6 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from sqlite3 import Connection
 from typing import Any
 
@@ -136,14 +135,6 @@ class SleeperClient:
             self._cache_set(key, slim)
         _MEMO[key] = (time.time(), slim)
         return slim
-
-    def get_user_by_username(self, username: str) -> dict:
-        """GET /v1/user/{username}"""
-        return self._get(f"/v1/user/{username}", ttl=CACHE_TTL_SECONDS)
-
-    # ------------------------------------------------------------------
-    # Cache internals
-    # ------------------------------------------------------------------
 
     def _get(self, path: str, ttl: int | None) -> Any:
         """

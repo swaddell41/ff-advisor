@@ -60,14 +60,6 @@ def get_db_path() -> Path:
     return Path(raw)
 
 
-def using_postgres() -> bool:
-    return bool(os.environ.get("DATABASE_URL"))
-
-
-# ---------------------------------------------------------------------------
-# Postgres facade
-# ---------------------------------------------------------------------------
-
 _OR_REPLACE_RE = re.compile(
     r"INSERT\s+OR\s+REPLACE\s+INTO\s+(\w+)\s*\(([^)]*)\)", re.IGNORECASE
 )
@@ -124,7 +116,14 @@ class PgConnection:
         cur = self._conn.cursor()
         # psycopg2 interprets % formatting whenever vars is not None — even
         # an empty list — so only pass params when there are some.
-        cur.execute(translated, [_adapt_param(p) for p in params] if params else None)
+        try:
+            cur.execute(translated, [_adapt_param(p) for p in params] if params else None)
+        except Exception:
+            # A failed statement poisons the transaction ("current transaction
+            # is aborted"); roll back so the connection stays usable.
+            self._conn.rollback()
+            cur.close()
+            raise
         return cur
 
     def executescript(self, script: str):

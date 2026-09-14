@@ -32,6 +32,7 @@ import logging
 from datetime import date
 from sqlite3 import Connection
 
+from app.clock import utc_today
 from app.pick_conversion import PickResolutionContext
 from app.pick_signals import (
     compute_draft_skill,
@@ -69,7 +70,7 @@ def _age_now(birth_date_str: str | None) -> float | None:
         return None
     try:
         bd = date.fromisoformat(birth_date_str)
-        return round((date.today() - bd).days / 365.25, 1)
+        return round((utc_today() - bd).days / 365.25, 1)
     except (ValueError, TypeError):
         return None
 

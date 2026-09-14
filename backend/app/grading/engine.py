@@ -41,9 +41,10 @@ each recompute for the affected trades.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from sqlite3 import Connection
 
+from app.clock import utc_today
 from app.value_sources import RosterAuditValueSource
 
 logger = logging.getLogger(__name__)
@@ -94,12 +95,12 @@ def _parse_trade_date(executed_at: str | None) -> date:
     Falls back to today if the string is missing or unparseable.
     """
     if not executed_at:
-        return date.today()
+        return utc_today()
     try:
         dt = datetime.fromisoformat(executed_at)
         return dt.date()
     except (ValueError, TypeError):
-        return date.today()
+        return utc_today()
 
 
 def _value_assets_for_roster(
@@ -178,7 +179,7 @@ def grade_trade(
     if source is None:
         source = RosterAuditValueSource(conn)
     if current_date is None:
-        current_date = date.today()
+        current_date = utc_today()
 
     # Fetch trade + league format
     trade_row = conn.execute(
@@ -264,7 +265,7 @@ def grade_league(
     if source is None:
         source = RosterAuditValueSource(conn)
     if current_date is None:
-        current_date = date.today()
+        current_date = utc_today()
 
     trade_ids = conn.execute(
         "SELECT id FROM trades WHERE league_id = ?", (league_id,)
@@ -297,7 +298,7 @@ def grade_all(
     if source is None:
         source = RosterAuditValueSource(conn)
     if current_date is None:
-        current_date = date.today()
+        current_date = utc_today()
 
     leagues = conn.execute("SELECT id FROM leagues").fetchall()
     results: dict[str, int] = {}

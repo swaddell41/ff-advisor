@@ -1,4 +1,4 @@
-.PHONY: setup backend frontend ingest snapshot test
+.PHONY: setup backend frontend ingest snapshot test backfill-rosters
 
 # Detect Python: prefer pyenv 3.12, fall back to system python3
 PYTHON := $(shell \

@@ -19,20 +19,25 @@ Sources
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
+import logging
 import requests
 
 from app.db import get_connection
-from app.lineup import LIVE_ROSTER_TTL, current_nfl_week
+from app.lineup import LIVE_ROSTER_TTL, SLOT_ORDER, current_nfl_week
 from app.redraft import (
+
     ESPN_POS,
     ESPN_SLOT,
     PRO_TEAM,
     _cache_get,
     _cache_set,
     _dst_espn_id_by_abbrev,
+    _espn_to_sleeper,
     _sleeper_to_espn,
     fetch_auction_values,
 )
+
+logger = logging.getLogger(__name__)
 
 STATUS_TTL = 30
 MATCHUP_TTL = 20
@@ -84,7 +89,7 @@ def fetch_game_status(conn) -> dict[str, dict]:
         if out:
             _cache_set(conn, key, out)
     except Exception:
-        pass
+        logger.warning("soft failure", exc_info=True)
     return out
 
 
@@ -114,7 +119,7 @@ def fetch_live_stats(season: int, week: int) -> dict[str, dict]:
             out[str(row.get("player_id"))] = {k: float(st[k]) for k in STAT_KEYS if st.get(k)}
         _STATS_MEMO[key] = (_t.time(), out)
     except Exception:
-        pass
+        logger.warning("soft failure", exc_info=True)
     return out
 
 
@@ -296,8 +301,7 @@ def live_espn(league_id: str, week: int, team_id: int, season: int = 2026, name:
     try:
         values = fetch_auction_values(conn, season)
         status = fetch_game_status(conn)
-        rev = {v: k for k, v in _sleeper_to_espn(conn).items()}
-        rev.update({v: k for k, v in _dst_espn_id_by_abbrev().items()})
+        rev = _espn_to_sleeper(conn)
         url = (f"{LM_API}/seasons/{season}/segments/0/leagues/{league_id}"
                f"?view=mMatchupScore&view=mBoxscore&view=mTeam&scoringPeriodId={week}")
         resp = requests.get(url, cookies=_espn_cookies(), timeout=20)
@@ -312,7 +316,7 @@ def live_espn(league_id: str, week: int, team_id: int, season: int = 2026, name:
         def starters_of(s: dict) -> list[dict]:
             rows = []
             for e in ((s.get("rosterForCurrentScoringPeriod") or {}).get("entries")) or []:
-                slot = ESPN_SLOT.get(int(e.get("lineupSlotId", 20)))
+                slot = ESPN_SLOT.get(int(e.get("lineupSlotId") or 20))
                 if not slot:
                     continue
                 ppe = e.get("playerPoolEntry") or {}
@@ -330,8 +334,7 @@ def live_espn(league_id: str, week: int, team_id: int, season: int = 2026, name:
                     "proj": float(((v or {}).get("weeks") or {}).get(str(week)) or 0.0),
                     "game": _game(status, team),
                 })
-            order = ["QB", "RB", "WR", "TE", "WRRB_FLEX", "REC_FLEX", "FLEX", "SUPER_FLEX", "K", "DEF"]
-            rows.sort(key=lambda r: order.index(r["slot"]) if r["slot"] in order else 99)
+            rows.sort(key=lambda r: SLOT_ORDER.index(r["slot"]) if r["slot"] in SLOT_ORDER else 99)
             return rows
 
         mine = next((m for m in sched if team_id in ((m.get("home") or {}).get("teamId"), (m.get("away") or {}).get("teamId"))), None)
@@ -408,10 +411,8 @@ EVENT_MIN_DELTA = 2.0      # points jump between polls that counts as "something
 
 
 def _load_events(conn, uid: str) -> tuple[dict, list, dict]:
-    prev = _cache_get(conn, f"live://snap/{uid}", EVENT_TTL) or {}
-    events = _cache_get(conn, f"live://events/{uid}", EVENT_TTL) or []
-    prev_stats = _cache_get(conn, f"live://stats/{uid}", EVENT_TTL) or {}
-    return prev, events, prev_stats
+    state = _cache_get(conn, f"live://state/{uid}", EVENT_TTL) or {}
+    return state.get("snap") or {}, state.get("events") or [], state.get("stats") or {}
 
 
 def build_feed(results: list[dict], status: dict, extras: dict, prev: dict, events: list, now: float,
@@ -528,9 +529,7 @@ def build_live(uid: str, leagues: list[dict], season: int = 2026) -> dict:
         now = datetime.now(timezone.utc).timestamp()
         live_stats = fetch_live_stats(season, week)
         feed, snapshot, events, stats_now = build_feed(results, status, extras, prev, events, now, prev_stats, live_stats)
-        _cache_set(conn, f"live://snap/{uid}", snapshot)
-        _cache_set(conn, f"live://events/{uid}", events)
-        _cache_set(conn, f"live://stats/{uid}", stats_now)
+        _cache_set(conn, f"live://state/{uid}", {"snap": snapshot, "events": events, "stats": stats_now})
     finally:
         conn.close()
     extras["feed"] = feed

@@ -21,19 +21,24 @@ row carries the full signal set so close calls can be judged in context.
 NFL week comes from Sleeper's public /v1/state/nfl.
 """
 
+import logging
 import requests
 
 from app.redraft import _cache_get, _cache_set
+
 
 from app.db import get_connection
 from app.redraft import (
     ESPN_POS,
     ESPN_SLOT,
     _dst_espn_id_by_abbrev,
+    _espn_to_sleeper,
     _sleeper_to_espn,
     fetch_auction_values,
     optimal_lineup,
 )
+
+logger = logging.getLogger(__name__)
 
 BAD_INJURY = {"OUT", "INJURY_RESERVE", "SUSPENSION", "DOUBTFUL"}
 # Rosters hold the set lineup: a lineup change should show up on the next
@@ -94,7 +99,7 @@ def fetch_vegas(conn, week: int) -> dict:
         if out:
             _cache_set(conn, key, out)
     except Exception:
-        pass  # vegas is enrichment, never a blocker
+        logger.warning("soft failure", exc_info=True)  # vegas is enrichment, never a blocker
     return out
 
 
@@ -123,7 +128,7 @@ def fetch_sleeper_projections(conn, season: int, week: int) -> dict:
         if out:
             _cache_set(conn, key, out)
     except Exception:
-        pass  # second opinion only — ESPN weekly proj still stands alone
+        logger.warning("soft failure", exc_info=True)  # second opinion only — ESPN weekly proj still stands alone
     return out
 
 
@@ -134,13 +139,23 @@ def blend(espn: float, sleeper: float | None) -> float:
     return round((espn + sleeper) / 2, 1)
 
 
+_WEEK_MEMO: dict[str, float | int] = {}
+
+
 def current_nfl_week() -> int:
+    """NFL week from Sleeper's public state, memoized an hour; on a network
+    blip the last good value wins rather than silently rendering week 1."""
+    import time as _t
+    if "week" in _WEEK_MEMO and _t.time() - float(_WEEK_MEMO.get("at", 0)) <= 3600:
+        return int(_WEEK_MEMO["week"])
     try:
         st = requests.get("https://api.sleeper.app/v1/state/nfl", timeout=10).json()
-        wk = int(st.get("week") or 1)
-        return max(1, min(18, wk))
+        wk = max(1, min(18, int(st.get("week") or 1)))
+        _WEEK_MEMO.update(week=wk, at=_t.time())
+        return wk
     except Exception:
-        return 1
+        logger.warning("could not fetch NFL week; using last known", exc_info=True)
+        return int(_WEEK_MEMO.get("week", 1))
 
 
 def _wk_proj(v: dict | None, week: int) -> float:
@@ -258,26 +273,15 @@ def lineup_sleeper(league_id: str, season: int, user_id: str, roster_id: int | N
 
 
 def lineup_espn(league_id: str, season: int, team_id: int) -> dict:
-    from app.api.espn import LM_API, _espn_cookies
+    from app.api.espn import espn_slots, fetch_espn_league
 
     conn = get_connection()
     try:
         week = current_nfl_week()
         values = fetch_auction_values(conn, season)
-        url = (
-            f"{LM_API}/seasons/{season}/segments/0/leagues/{league_id}"
-            "?view=mSettings&view=mTeam&view=mRoster"
-        )
-        resp = requests.get(url, cookies=_espn_cookies(), timeout=20)
-        resp.raise_for_status()
-        data = resp.json()
+        data = fetch_espn_league(league_id, season, "view=mSettings&view=mTeam&view=mRoster")
         settings = data.get("settings") or {}
-        slot_counts = (settings.get("rosterSettings") or {}).get("lineupSlotCounts") or {}
-        slots: list[str] = []
-        for sid, n in slot_counts.items():
-            token = ESPN_SLOT.get(int(sid))
-            if token:
-                slots.extend([token] * int(n))
+        slots = espn_slots(settings)
 
         team = next((t for t in data.get("teams") or [] if t.get("id") == team_id), None)
         if team is None:
@@ -285,8 +289,7 @@ def lineup_espn(league_id: str, season: int, team_id: int) -> dict:
 
         vegas = fetch_vegas(conn, week)
         sproj = fetch_sleeper_projections(conn, season, week)
-        espn_to_sleeper = {v: k for k, v in _sleeper_to_espn(conn).items()}
-        espn_to_sleeper.update({v: k for k, v in _dst_espn_id_by_abbrev().items()})
+        espn_to_sleeper = _espn_to_sleeper(conn)
 
         players, current_names = [], set()
         for entry in ((team.get("roster") or {}).get("entries")) or []:
@@ -311,7 +314,7 @@ def lineup_espn(league_id: str, season: int, team_id: int) -> dict:
                 **(vegas.get(tm) or {}),
             }
             players.append(row)
-            if int(entry.get("lineupSlotId", 20)) in ESPN_SLOT:
+            if int(entry.get("lineupSlotId") or 20) in ESPN_SLOT:
                 current_names.add(row["name"])
         tname = team.get("name") or f"Team {team_id}"
         out = _build_result(tname, week, players, current_names, slots)

@@ -9,7 +9,6 @@ POST /api/grading/recompute               — re-run grading for league or trade
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import date
 
@@ -32,16 +31,6 @@ def _conn():
     conn = get_connection()
     conn.row_factory = __import__("sqlite3").Row
     return conn
-
-
-def _grade_label_color(grade: str | None) -> str:
-    if not grade:
-        return "neutral"
-    if grade in ("A+", "A", "A-"):
-        return "green"
-    if grade in ("B+", "B", "B-"):
-        return "yellow"
-    return "red"
 
 
 def _format_asset(row) -> dict:
