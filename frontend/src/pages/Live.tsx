@@ -49,22 +49,24 @@ const DOT: Record<Starter['game']['state'], string> = { in: 'bg-emerald-400', po
 
 // Decided-ness of a matchup from the two sides' points and remaining projection.
 type Verdict = { label: string; cls: string } | null
-function verdict(m: Matchup, close: boolean): Verdict {
+function verdict(m: Matchup): Verdict {
   if (!m.me || !m.opp) return null
   const lead = m.me.points - m.opp.points
   const left = (s: Side) => s.in_play + s.yet_to_play
-  const over = left(m.me) === 0 && left(m.opp) === 0
-  if (over) {
+  const meLeft = left(m.me), oppLeft = left(m.opp)
+  const WON = { label: 'won', cls: 'border-emerald-500/60 bg-emerald-500/10 text-emerald-400' }
+  const LOST = { label: 'lost', cls: 'border-red-500/60 bg-red-500/10 text-red-400' }
+  // Definite: the side that could still change the result has nobody left.
+  if (meLeft === 0 && oppLeft === 0) {
     if (Math.abs(lead) < 0.05) return { label: 'tied', cls: 'border-border text-muted-foreground' }
-    return lead > 0
-      ? { label: 'won', cls: 'border-emerald-500/60 bg-emerald-500/10 text-emerald-400' }
-      : { label: 'lost', cls: 'border-red-500/60 bg-red-500/10 text-red-400' }
+    return lead > 0 ? WON : LOST
   }
-  if (close) return null
-  // Trailing side's remaining projection, with a 50% upside cushion + 5,
-  // is what it would take to flip it. If the lead is bigger, call it.
+  if (lead > 0 && oppLeft === 0) return WON
+  if (lead < 0 && meLeft === 0) return LOST
+  // Likely: the trailing side's remaining projection (+25% upside, +5)
+  // can't close the gap.
   const trailing = lead > 0 ? m.opp : m.me
-  const needed = trailing.proj_remaining * 1.5 + 5
+  const needed = trailing.proj_remaining * 1.25 + 5
   if (Math.abs(lead) > needed) {
     return lead > 0
       ? { label: 'likely win', cls: 'border-emerald-500/40 text-emerald-400/90' }
@@ -98,7 +100,11 @@ export default function Live() {
   const live = data?.games.find((g) => g.state === 'in')?.count || 0
   const byKey = new Map((data?.matchups || []).map((m) => [`${m.platform}:${m.league_id}`, m]))
   const feed = data?.feed || []
-  const isClose = (f: FeedItem) => f.kind === 'matchup' && f.live_players > 0 && f.margin < 15
+  const isClose = (f: FeedItem) => {
+    if (f.kind !== 'matchup' || f.live_players === 0 || f.margin >= 15) return false
+    const m = byKey.get(`${f.platform}:${f.league_id}`)
+    return !!m && verdict(m) === null
+  }
   const closeNames = feed.filter(isClose).map((f) => byKey.get(`${(f as any).platform}:${(f as any).league_id}`)?.league).filter(Boolean) as string[]
   const closeLive = closeNames.length
   const bursts = feed.filter((f) => f.kind === 'score').length
@@ -106,7 +112,7 @@ export default function Live() {
   for (const f of feed) {
     if (f.kind !== 'matchup') continue
     const m = byKey.get(`${f.platform}:${f.league_id}`)
-    const v = m && verdict(m, isClose(f))
+    const v = m && verdict(m)
     if (v?.label === 'won') tally.won++
     else if (v?.label === 'lost') tally.lost++
     else if (v?.label === 'likely win') tally.likelyWin++
@@ -149,7 +155,7 @@ export default function Live() {
           <div className="text-sm font-medium">{m.league}</div>
           <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
             {close && <span className="rounded-full border border-amber-500/50 bg-amber-500/10 text-amber-400 px-2 py-0.5">close</span>}
-            {(() => { const v = verdict(m, close); return v ? <span className={cn('rounded-full border px-2 py-0.5', v.cls)}>{v.label}</span> : null })()}
+            {(() => { const v = verdict(m); return v ? <span className={cn('rounded-full border px-2 py-0.5', v.cls)}>{v.label}</span> : null })()}
             {liveCount > 0 && <span className="text-emerald-400">● {liveCount} on the field</span>}
             <span>{m.platform}</span>
           </div>
