@@ -1,5 +1,6 @@
-import { Fragment, useEffect, useState } from 'react'
-import { SavedLeagueChips, useSavedLeagues, type SavedLeague } from '@/components/SavedLeagues'
+import { Fragment, useRef, useState } from 'react'
+import { SavedLeagueChips } from '@/components/SavedLeagues'
+import { SEASON, useLeagueSelection } from '@/lib/useLeagueSelection'
 import { cn } from '@/lib/utils'
 
 /**
@@ -53,43 +54,20 @@ function heat(rank: number | undefined, teams: number): string {
 }
 
 export default function RedraftEval() {
-  // A ?platform=&league= link (from My Leagues) wins over the last-used league.
-  const saved = (() => {
-    const qp = new URLSearchParams(window.location.search)
-    if (qp.get('league')) return { platform: qp.get('platform') || 'sleeper', leagueId: qp.get('league') }
-    try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}') } catch { return {} }
-  })()
-  const [platform, setPlatform] = useState<'sleeper' | 'espn'>(saved.platform || 'sleeper')
-  const [leagueId, setLeagueId] = useState<string>(saved.leagueId || '')
-  const [method, setMethod] = useState<MethodId>(saved.method || 'auction')
-  const savedLeagues = useSavedLeagues()
-  const [season] = useState(2026)
-  const [data, setData] = useState<EvalResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const methodRef = useRef<MethodId>((() => { try { return JSON.parse(localStorage.getItem(STORE_KEY + '-method') || 'null') || 'auction' } catch { return 'auction' } })())
+  const [method, setMethodState] = useState<MethodId>(methodRef.current)
+  const { platform, setPlatform, leagueId, setLeagueId, data, error, busy, run, pickSavedLeague, leagues, remove } =
+    useLeagueSelection<EvalResponse>({
+      storeKey: STORE_KEY,
+      needsTeam: false,
+      url: (pf, id, _tid, extra) => `/api/redraft/evaluate?platform=${pf}&league_id=${encodeURIComponent(id)}&season=${SEASON}&method=${extra || methodRef.current}`,
+      leagueName: (d) => d.league?.name || '',
+    })
   const [open, setOpen] = useState<string | null>(null)
-
-  const run = async (pf = platform, id = leagueId, m: MethodId = method) => {
-    if (!id.trim()) return
-    setBusy(true); setError(null)
-    try {
-      const r = await fetch(`/api/redraft/evaluate?platform=${pf}&league_id=${encodeURIComponent(id.trim())}&season=${season}&method=${m}`)
-      const j = await r.json()
-      if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`)
-      setData(j)
-      try { localStorage.setItem(STORE_KEY, JSON.stringify({ platform: pf, leagueId: id.trim(), method: m })) } catch { /* private mode */ }
-      savedLeagues.save({ platform: pf, league_id: id.trim(), season, name: j.league?.name || '', team_id: '' })
-    } catch (e: any) {
-      setError(e.message || String(e))
-      setData(null)
-    } finally { setBusy(false) }
-  }
-
-  useEffect(() => { if (saved.leagueId) run(saved.platform || 'sleeper', saved.leagueId, saved.method || 'auction') }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
   const pickMethod = (m: MethodId) => {
-    setMethod(m)
-    if (leagueId.trim()) run(platform, leagueId, m)
+    methodRef.current = m; setMethodState(m)
+    try { localStorage.setItem(STORE_KEY + '-method', JSON.stringify(m)) } catch { /* private mode */ }
+    if (leagueId.trim()) run(platform, leagueId, '', m)
   }
 
   const teams = data?.teams || []
@@ -110,10 +88,10 @@ export default function RedraftEval() {
       </div>
 
       <SavedLeagueChips
-        leagues={savedLeagues.leagues}
+        leagues={leagues}
         active={{ platform, league_id: leagueId }}
-        onPick={(l: SavedLeague) => { setPlatform(l.platform); setLeagueId(l.league_id); run(l.platform, l.league_id, method) }}
-        onRemove={savedLeagues.remove}
+        onPick={(l) => pickSavedLeague(l, method)}
+        onRemove={remove}
       />
 
       <div className="flex flex-wrap items-center gap-2">

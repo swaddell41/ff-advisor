@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { cn } from '@/lib/utils'
+import { api } from '@/lib/api'
+import { cn, errMsg } from '@/lib/utils'
 
 /**
  * My Leagues — every league in one place, each card leading with the
@@ -52,14 +53,12 @@ export default function Home() {
       const j = await r.json()
       if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`)
       setData(j)
-    } catch (e: any) { setError(e.message || String(e)) }
+    } catch (e: unknown) { setError(errMsg(e)) }
   }
   useEffect(() => { load() }, [])
 
   const setPosture = async (c: Card, posture: string) => {
-    await fetch(`/api/leagues/${c.league_id}/my-posture`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ posture }),
-    })
+    try { await api.setMyPosture(c.league_id, posture) } catch (e: unknown) { setError(errMsg(e)); return }
     load()
   }
 
@@ -115,7 +114,7 @@ export default function Home() {
                 {c.lineup && (
                   <div className="text-sm">
                     <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">Week {data!.week} lineup</span>
+                      <span className="text-muted-foreground">Week {data?.week} lineup</span>
                       {c.lineup.delta > 0.5
                         ? <span className="text-amber-400 font-medium tabular-nums">+{c.lineup.delta.toFixed(1)} pts on bench</span>
                         : <span className="text-emerald-400 font-medium">Optimal ✓</span>}

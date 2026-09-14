@@ -555,9 +555,6 @@ export const api = {
       method: 'POST',
     }),
 
-  onboardStatus: () =>
-    apiFetch<{ leagues: Record<string, { status: string; detail: string | null }> }>('/api/onboard/status'),
-
   getPlayerCard: (leagueId: string, playerId: string) =>
     apiFetch<PlayerCard>(`/api/leagues/${leagueId}/players/${playerId}/card`),
 
@@ -573,11 +570,6 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
-
-  getMyPosture: (leagueId: string) =>
-    apiFetch<{ league_id: string; posture: string; is_override: boolean }>(
-      `/api/leagues/${leagueId}/my-posture`
-    ),
 
   setMyPosture: (leagueId: string, posture: string) =>
     apiFetch<{ league_id: string; posture: string; is_override: boolean }>(

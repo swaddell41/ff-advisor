@@ -11,13 +11,6 @@ export function gradeColor(grade: string | null | undefined): GradeColor {
   return 'red'
 }
 
-export function gradeClass(grade: string | null | undefined): string {
-  const color = gradeColor(grade)
-  if (color === 'green') return 'text-green-400 font-bold'
-  if (color === 'yellow') return 'text-yellow-400 font-bold'
-  if (color === 'red') return 'text-red-400 font-bold'
-  return 'text-muted-foreground'
-}
 
 export function gradeBadgeVariant(grade: string | null | undefined) {
   const color = gradeColor(grade)

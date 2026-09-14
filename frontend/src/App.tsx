@@ -1,16 +1,16 @@
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { Routes, Route, Link, Navigate, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import MyDashboard from '@/pages/MyDashboard'
 import Onboarding from '@/pages/Onboarding'
-import TradeHub from '@/pages/TradeHub'
+const TradeHub = lazy(() => import('@/pages/TradeHub'))
 import LeaguePicker from '@/pages/LeaguePicker'
 import TradeHistory from '@/pages/TradeHistory'
 import TradeDetail from '@/pages/TradeDetail'
 import ManagerList from '@/pages/ManagerList'
-import ManagerProfile from '@/pages/ManagerProfile'
-import DraftCompanion from '@/pages/DraftCompanion'
+const ManagerProfile = lazy(() => import('@/pages/ManagerProfile'))
+const DraftCompanion = lazy(() => import('@/pages/DraftCompanion'))
 import RedraftEval from '@/pages/RedraftEval'
 import StartSit from '@/pages/StartSit'
 import Waivers from '@/pages/Waivers'
@@ -155,6 +155,7 @@ export default function App() {
       </header>
 
       <main className="px-6 py-6 max-w-[1400px] mx-auto">
+        <Suspense fallback={<div className="text-sm text-muted-foreground">Loading…</div>}>
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/live" element={<Live />} />
@@ -172,6 +173,7 @@ export default function App() {
           <Route path="/leagues/:leagueId/managers/:userId" element={<ManagerProfile />} />
           <Route path="/trades/:tradeId" element={<TradeDetail />} />
         </Routes>
+        </Suspense>
       </main>
     </div>
   )

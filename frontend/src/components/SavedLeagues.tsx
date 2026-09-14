@@ -3,7 +3,8 @@ import { cn } from '@/lib/utils'
 
 /**
  * Per-user saved leagues (server-side, so they follow the account across
- * devices). Chips render on every redraft-hub page; clicking one hands the
+ * devices). Pages also remember the LAST-USED league in localStorage — that
+ * is a per-device convenience, the server list is the source of truth. Chips render on every redraft-hub page; clicking one hands the
  * league to the page, the × unsaves it.
  */
 
@@ -25,18 +26,20 @@ export function useSavedLeagues() {
   }
   useEffect(() => { refresh() }, [])
   const save = async (l: SavedLeague) => {
-    await fetch('/api/me/saved-leagues', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(l),
-    })
-    refresh()
+    try {
+      const r = await fetch('/api/me/saved-leagues', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(l),
+      })
+      if (r.ok) refresh()
+    } catch { /* offline — the page still works without the bookmark */ }
   }
   const remove = async (platform: string, league_id: string) => {
-    await fetch(`/api/me/saved-leagues?platform=${platform}&league_id=${encodeURIComponent(league_id)}`, { method: 'DELETE' })
-    refresh()
+    try {
+      const r = await fetch(`/api/me/saved-leagues?platform=${platform}&league_id=${encodeURIComponent(league_id)}`, { method: 'DELETE' })
+      if (r.ok) refresh()
+    } catch { /* ignore */ }
   }
-  return { leagues, save, remove, refresh }
+  return { leagues, save, remove }
 }
 
 export function SavedLeagueChips({

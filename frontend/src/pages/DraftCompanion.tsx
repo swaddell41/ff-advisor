@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createDraftEngine, pickSlot, type DraftEngine } from '@/lib/draftEngine'
 import { simulatePlan, type DraftPlan } from '@/lib/draftPlan'
-import { cn } from '@/lib/utils'
+import { cn, errMsg } from '@/lib/utils'
 
 /**
  * Mobile draft companion: the extension's side-panel recommendation, as a
@@ -141,8 +141,8 @@ export default function DraftCompanion() {
       setDrafts(all)
       persist({ userId: u.user_id })
       if (!all.length) setError('No drafts found for this account.')
-    } catch (e: any) {
-      setError(e.message || String(e))
+    } catch (e: unknown) {
+      setError(errMsg(e))
     } finally { setBusy(false) }
   }
 
@@ -213,8 +213,8 @@ export default function DraftCompanion() {
       setEspnTeams(d.teams || [])
       persist({ espnLeagueId: espnLeagueId.trim(), espnSeason })
       if (!(d.teams || []).length) setError('League loaded but has no teams — check the league ID.')
-    } catch (e: any) {
-      setError(e.message || String(e))
+    } catch (e: unknown) {
+      setError(errMsg(e))
     } finally { setBusy(false) }
   }
 
@@ -286,18 +286,21 @@ export default function DraftCompanion() {
     try {
       if (platform === 'sleeper') await sleeperTick()
       else await espnTick()
-    } catch (e: any) {
-      setError(e.message || String(e))
+    } catch (e: unknown) {
+      setError(errMsg(e))
     }
   }, [platform, sleeperTick, espnTick])
 
   useEffect(() => {
     if (!active) return
     tick()
-    const iv = setInterval(tick, POLL_MS[platform])
-    const onVis = () => { if (document.visibilityState === 'visible') tick() }
+    let iv: number | null = window.setInterval(tick, POLL_MS[platform])
+    const onVis = () => {
+      if (document.visibilityState === 'visible') { tick(); if (iv == null) iv = window.setInterval(tick, POLL_MS[platform]) }
+      else if (iv != null) { window.clearInterval(iv); iv = null }
+    }
     document.addEventListener('visibilitychange', onVis)
-    return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onVis) }
+    return () => { if (iv != null) window.clearInterval(iv); document.removeEventListener('visibilitychange', onVis) }
   }, [active, platform, tick])
 
   // Fresh live state → simulate forward → restore live state.
@@ -307,8 +310,8 @@ export default function DraftCompanion() {
       await tick()
       setPlan(simulatePlan(engine()))
       await tick()
-    } catch (e: any) {
-      setError(e.message || String(e))
+    } catch (e: unknown) {
+      setError(errMsg(e))
     } finally { setPlanBusy(false) }
   }
 

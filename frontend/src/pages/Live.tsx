@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { cn } from '@/lib/utils'
+import { cn, errMsg } from '@/lib/utils'
 
 /**
  * Live: a feed ranked by what matters right now. The backend scores every
@@ -145,23 +145,32 @@ export default function Live() {
       const j = await r.json()
       if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`)
       setData(j); setError(null)
-    } catch (e: any) { setError(e.message || String(e)) }
+    } catch (e: unknown) { setError(errMsg(e)) }
   }
   useEffect(() => {
-    load()
-    timer.current = window.setInterval(load, POLL_MS)
-    const onVis = () => { if (document.visibilityState === 'visible') load() }
+    // Poll only while the tab is visible; refresh immediately on return.
+    const start = () => { if (timer.current == null) timer.current = window.setInterval(load, POLL_MS) }
+    const stop = () => { if (timer.current != null) { window.clearInterval(timer.current); timer.current = null } }
+    load(); start()
+    const onVis = () => { if (document.visibilityState === 'visible') { load(); start() } else stop() }
     document.addEventListener('visibilitychange', onVis)
-    return () => { if (timer.current) window.clearInterval(timer.current); document.removeEventListener('visibilitychange', onVis) }
+    return () => { stop(); document.removeEventListener('visibilitychange', onVis) }
   }, [])
 
   const live = data?.games.find((g) => g.state === 'in')?.count || 0
-  const byKey = new Map((data?.matchups || []).map((m) => [`${m.platform}:${m.league_id}`, m]))
+  const byKey = useMemo(() => new Map((data?.matchups || []).map((m) => [`${m.platform}:${m.league_id}`, m])), [data])
   const feed = data?.feed || []
+  // Verdicts and rooting analysis change only when data does — not per render.
+  const verdictOf = useMemo(() => {
+    const map = new Map<string, Verdict>()
+    for (const m of data?.matchups || []) map.set(`${m.platform}:${m.league_id}`, verdict(m))
+    return (m: Matchup) => map.get(`${m.platform}:${m.league_id}`) ?? null
+  }, [data])
+  const rooting = useMemo(() => analyzeRooting(data?.conflicts || [], data?.matchups || []), [data])
   const isClose = (f: FeedItem) => {
     if (f.kind !== 'matchup' || f.live_players === 0 || f.margin >= 15) return false
     const m = byKey.get(`${f.platform}:${f.league_id}`)
-    return !!m && verdict(m) === null
+    return !!m && verdictOf(m) === null
   }
   const closeNames = feed.filter(isClose).map((f) => byKey.get(`${(f as any).platform}:${(f as any).league_id}`)?.league).filter(Boolean) as string[]
   const closeLive = closeNames.length
@@ -170,7 +179,7 @@ export default function Live() {
   for (const f of feed) {
     if (f.kind !== 'matchup') continue
     const m = byKey.get(`${f.platform}:${f.league_id}`)
-    const v = m && verdict(m)
+    const v = m && verdictOf(m)
     if (v?.label === 'won') tally.won++
     else if (v?.label === 'lost') tally.lost++
     else if (v?.label === 'likely win') tally.likelyWin++
@@ -187,8 +196,8 @@ export default function Live() {
 
   const roster = (s: Side | null) => s ? (
     <div className="space-y-0.5">
-      {s.starters.map((p, i) => (
-        <div key={i} className="flex items-center gap-2 text-xs">
+      {s.starters.map((p) => (
+        <div key={`${p.slot}|${p.name}`} className="flex items-center gap-2 text-xs">
           <span className={cn('inline-block w-1.5 h-1.5 rounded-full shrink-0', DOT[p.game.state])} title={p.game.detail} />
           <span className="text-muted-foreground w-8 shrink-0 truncate" title={p.slot}>{SLOT_SHORT[p.slot] || p.slot}</span>
           <span className="flex-1 min-w-0 truncate" title={`${p.name} · ${p.team}`}>{p.name} <span className="text-muted-foreground">{p.team}</span></span>
@@ -213,7 +222,7 @@ export default function Live() {
           <div className="text-sm font-medium">{m.league}</div>
           <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
             {close && <span className="rounded-full border border-amber-500/50 bg-amber-500/10 text-amber-400 px-2 py-0.5">close</span>}
-            {(() => { const v = verdict(m); return v ? <span className={cn('rounded-full border px-2 py-0.5', v.cls)}>{v.label}</span> : null })()}
+            {(() => { const v = verdictOf(m); return v ? <span className={cn('rounded-full border px-2 py-0.5', v.cls)}>{v.label}</span> : null })()}
             {liveCount > 0 && <span className="text-emerald-400">● {liveCount} on the field</span>}
             <span>{m.platform}</span>
           </div>
@@ -300,7 +309,7 @@ export default function Live() {
         const bad = f.opp.length > 0
         const age = data ? Math.max(0, Math.round((new Date(data.updated).getTime() / 1000 - f.ts) / 60)) : 0
         return (
-          <div key={`sc${i}`} className={cn('rounded-xl border p-3 flex items-center gap-3', good && !bad ? 'border-emerald-500/40 bg-emerald-500/5' : bad && !good ? 'border-amber-500/40 bg-amber-500/5' : 'border-border bg-card')}>
+          <div key={`sc|${f.name}|${f.ts}`} className={cn('rounded-xl border p-3 flex items-center gap-3', good && !bad ? 'border-emerald-500/40 bg-emerald-500/5' : bad && !good ? 'border-amber-500/40 bg-amber-500/5' : 'border-border bg-card')}>
             <div className={cn('text-xl font-semibold tabular-nums shrink-0', f.delta > 0 ? (good && !bad ? 'text-emerald-400' : bad && !good ? 'text-amber-400' : '') : 'text-red-400')}>
               {f.delta > 0 ? '+' : ''}{f.delta.toFixed(1)}
             </div>
@@ -327,7 +336,6 @@ export default function Live() {
         return m ? matchupCard(m, f.live_players, isClose(f)) : null
       }
       case 'conflicts': {
-        const rooting = analyzeRooting(data?.conflicts || [], data?.matchups || [])
         const torn = rooting.filter((r) => r.lean === 'torn')
         const leaning = rooting.filter((r) => r.lean === 'for' || r.lean === 'against')
         const moot = rooting.filter((r) => r.lean === 'moot')

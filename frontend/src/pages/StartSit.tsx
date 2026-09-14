@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { SavedLeagueChips, useSavedLeagues, type SavedLeague } from '@/components/SavedLeagues'
+import { SavedLeagueChips } from '@/components/SavedLeagues'
+import { SEASON, useLeagueSelection } from '@/lib/useLeagueSelection'
 import { cn } from '@/lib/utils'
 
 /**
@@ -24,60 +24,12 @@ interface LineupResponse {
 }
 
 export default function StartSit() {
-  // A ?platform=&league=&team= link (from My Leagues) wins over the last-used league.
-  const saved = (() => {
-    const qp = new URLSearchParams(window.location.search)
-    if (qp.get('league')) return { platform: qp.get('platform') || 'sleeper', leagueId: qp.get('league'), teamId: qp.get('team') || '' }
-    try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}') } catch { return {} }
-  })()
-  const { leagues, save, remove } = useSavedLeagues()
-  const [platform, setPlatform] = useState<'sleeper' | 'espn'>(saved.platform || 'sleeper')
-  const [leagueId, setLeagueId] = useState<string>(saved.leagueId || '')
-  const [teamId, setTeamId] = useState<string>(saved.teamId || '')
-  const [teams, setTeams] = useState<{ id: number; name: string }[] | null>(null)
-  const [data, setData] = useState<LineupResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  const persist = (patch: Record<string, string>) => {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify({ platform, leagueId, teamId, ...patch })) } catch { /* private mode */ }
-  }
-
-  const run = async (pf = platform, id = leagueId, tid = teamId) => {
-    if (!id.trim()) return
-    setBusy(true); setError(null); setTeams(null)
-    try {
-      let url = `/api/lineup?platform=${pf}&league_id=${encodeURIComponent(id.trim())}&season=2026`
-      if (pf === 'espn') {
-        if (!tid) {
-          // One-time team pick: the draft proxy already returns the team list.
-          const lr = await fetch(`/api/espn/draft/${encodeURIComponent(id.trim())}?season=2026`)
-          const lj = await lr.json()
-          if (!lr.ok) throw new Error(lj.detail || `HTTP ${lr.status}`)
-          setTeams(lj.teams || [])
-          setBusy(false)
-          return
-        }
-        url += `&team_id=${tid}`
-      }
-      const r = await fetch(url)
-      const j = await r.json()
-      if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`)
-      setData(j)
-      persist({ platform: pf, leagueId: id.trim(), teamId: tid })
-      // Keep the hub's saved list fresh with what we just used.
-      save({ platform: pf, league_id: id.trim(), season: 2026, name: j.league || '', team_id: tid })
-    } catch (e: any) {
-      setError(e.message || String(e)); setData(null)
-    } finally { setBusy(false) }
-  }
-
-  useEffect(() => { if (saved.leagueId) run(saved.platform || 'sleeper', saved.leagueId, saved.teamId || '') }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const pickSavedLeague = (l: SavedLeague) => {
-    setPlatform(l.platform); setLeagueId(l.league_id); setTeamId(l.team_id || '')
-    run(l.platform, l.league_id, l.team_id || '')
-  }
+  const { platform, setPlatform, leagueId, setLeagueId, setTeamId, teamId, teams, data, error, busy, run, pickSavedLeague, pickTeam, leagues, remove } =
+    useLeagueSelection<LineupResponse>({
+      storeKey: STORE_KEY,
+      url: (pf, id, tid) => `/api/lineup?platform=${pf}&league_id=${encodeURIComponent(id)}&season=${SEASON}${pf === 'espn' ? `&team_id=${tid}` : ''}`,
+      leagueName: (d) => d.league,
+    })
 
   const inj = (r: Row) =>
     r.injury && r.injury !== 'ACTIVE' ? (
@@ -168,7 +120,7 @@ export default function StartSit() {
             {teams.map((t) => (
               <button
                 key={t.id}
-                onClick={() => { setTeamId(String(t.id)); run(platform, leagueId, String(t.id)) }}
+                onClick={() => pickTeam(t.id)}
                 className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted/40"
               >
                 {t.name}
@@ -204,7 +156,7 @@ export default function StartSit() {
               <a
                 href={platform === 'sleeper'
                   ? `https://sleeper.com/leagues/${encodeURIComponent(leagueId.trim())}/team`
-                  : `https://fantasy.espn.com/football/team?leagueId=${encodeURIComponent(leagueId.trim())}&teamId=${encodeURIComponent(teamId)}&seasonId=2026`}
+                  : `https://fantasy.espn.com/football/team?leagueId=${encodeURIComponent(leagueId.trim())}&teamId=${encodeURIComponent(teamId)}&seasonId=${SEASON}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="shrink-0 rounded-md bg-primary text-primary-foreground px-3 py-1.5 text-xs font-medium whitespace-nowrap"
