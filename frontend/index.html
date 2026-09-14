@@ -5,6 +5,22 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Dynasty Advisor</title>
+    <script>
+      // Blank-page failsafe: if the app bundle fails to load (a stale shell
+      // pointing at a bundle that no longer exists after a deploy), reload
+      // once bypassing caches instead of leaving an empty page.
+      window.addEventListener('error', function (e) {
+        var t = e && e.target;
+        if (t && t.tagName === 'SCRIPT' && t.src && !sessionStorage.getItem('ffa-reloaded')) {
+          sessionStorage.setItem('ffa-reloaded', '1');
+          location.reload();
+        }
+      }, true);
+      window.addEventListener('vite:preloadError', function () {
+        if (!sessionStorage.getItem('ffa-reloaded')) { sessionStorage.setItem('ffa-reloaded', '1'); location.reload(); }
+      });
+      window.addEventListener('load', function () { setTimeout(function () { sessionStorage.removeItem('ffa-reloaded'); }, 15000); });
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
