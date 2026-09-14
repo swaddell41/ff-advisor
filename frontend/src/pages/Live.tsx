@@ -182,8 +182,8 @@ export default function Live() {
               <div className="pt-2 border-t border-border">
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Around the league</div>
                 <div className="grid @3xl:grid-cols-2 gap-x-8 gap-y-0.5">
-                  {m.scoreboard.map((g, i) => {
-                    const mine = !!m.me && (g.a.name === m.me.name || g.b.name === m.me.name)
+                  {m.scoreboard.filter((g) => !(m.me && (g.a.name === m.me.name || g.b.name === m.me.name))).map((g, i) => {
+                    const mine = false
                     const aLead = g.a.points > g.b.points
                     const bLead = g.b.points > g.a.points
                     return (
