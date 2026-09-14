@@ -17,6 +17,9 @@ interface Matchup {
   platform: 'sleeper' | 'espn'; league_id: string; league: string; week: number
   me: Side | null; opp: Side | null
   scoreboard: { a: { name: string; points: number }; b: { name: string; points: number } }[]
+  median_on?: boolean
+  median_auto?: boolean
+  median?: { now: number; proj: number; mine_now: number; mine_proj: number; margin_now: number; margin_proj: number; teams_left: number; teams: number; verdict: 'won' | 'lost' | 'tied' | 'likely win' | 'likely loss' | 'close' } | null
   error?: string
 }
 interface Agg { name: string; pos: string; team: string; points: number; leagues?: string[]; game?: { state: string; detail: string } }
@@ -147,6 +150,14 @@ export default function Live() {
       setData(j); setError(null)
     } catch (e: unknown) { setError(errMsg(e)) }
   }
+  const toggleMedian = async (m: Matchup) => {
+    try {
+      await fetch('/api/me/prefs/median', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platform: m.platform, league_id: m.league_id, on: !m.median_on }) })
+      load()
+    } catch (e: unknown) { setError(errMsg(e)) }
+  }
+
   useEffect(() => {
     // Poll only while the tab is visible; refresh immediately on return.
     const start = () => { if (timer.current == null) timer.current = window.setInterval(load, POLL_MS) }
@@ -176,6 +187,12 @@ export default function Live() {
   const closeLive = closeNames.length
   const bursts = feed.filter((f) => f.kind === 'score').length
   const tally = { won: 0, lost: 0, likelyWin: 0, likelyLoss: 0 }
+  const medianTally = { won: 0, lost: 0, likelyWin: 0, likelyLoss: 0 }
+  for (const m of data?.matchups || []) {
+    const v = m.median?.verdict
+    if (v === 'won') medianTally.won++; else if (v === 'lost') medianTally.lost++
+    else if (v === 'likely win') medianTally.likelyWin++; else if (v === 'likely loss') medianTally.likelyLoss++
+  }
   for (const f of feed) {
     if (f.kind !== 'matchup') continue
     const m = byKey.get(`${f.platform}:${f.league_id}`)
@@ -236,9 +253,37 @@ export default function Live() {
               </div>
               {side(m.opp, false)}
             </div>
-            <button onClick={() => setOpen(open === key ? null : key)} className="text-xs text-muted-foreground underline underline-offset-2">
-              {open === key ? 'hide starters' : 'show starters'}
-            </button>
+            {m.median && (() => {
+              const v = m.median.verdict
+              const tone = v === 'won' || v === 'likely win' ? 'text-emerald-400 border-emerald-500/40'
+                : v === 'lost' || v === 'likely loss' ? 'text-red-400 border-red-500/40' : 'text-amber-400 border-amber-500/40'
+              const label = v === 'won' ? 'median win' : v === 'lost' ? 'median loss' : v === 'tied' ? 'median tie'
+                : v === 'likely win' ? 'likely median win' : v === 'likely loss' ? 'likely median loss' : 'median: close'
+              const margin = m.median.teams_left > 0 ? m.median.margin_proj : m.median.margin_now
+              return (
+                <div className="rounded-lg border border-border/70 px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                  <span className={cn('rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider', tone)}>{label}</span>
+                  <span className="tabular-nums">
+                    <span className="text-muted-foreground">league median</span> {m.median.now.toFixed(1)}
+                    {m.median.teams_left > 0 && <span className="text-muted-foreground"> · proj {m.median.proj.toFixed(1)}</span>}
+                  </span>
+                  <span className={cn('tabular-nums font-medium', margin >= 0 ? 'text-emerald-400' : 'text-red-400')}>
+                    you {margin >= 0 ? '+' : ''}{margin.toFixed(1)}{m.median.teams_left > 0 ? ' projected' : ''}
+                  </span>
+                  {m.median.teams_left > 0 && <span className="text-muted-foreground">{m.median.teams_left} of {m.median.teams} teams still playing</span>}
+                </div>
+              )
+            })()}
+            <div className="flex items-center gap-3">
+              <button onClick={() => setOpen(open === key ? null : key)} className="text-xs text-muted-foreground underline underline-offset-2">
+                {open === key ? 'hide starters' : 'show starters'}
+              </button>
+              {!m.median_auto && (
+                <button onClick={() => toggleMedian(m)} className="text-xs text-muted-foreground underline underline-offset-2" title="Show this week's matchup against the league median score">
+                  {m.median_on ? 'hide median' : 'vs median'}
+                </button>
+              )}
+            </div>
             {open === key && (
               <div className="grid @3xl:grid-cols-2 gap-4 pt-1 border-t border-border">
                 <div><div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">You</div>{roster(m.me)}</div>
@@ -467,6 +512,9 @@ export default function Live() {
                   {tally.likelyWin > 0 && <span className="text-muted-foreground"> ({tally.likelyWin} likely)</span>}
                   {' / '}<span className="text-red-400">{tally.lost + tally.likelyLoss} loss{tally.lost + tally.likelyLoss === 1 ? '' : 'es'}</span>
                   {tally.likelyLoss > 0 && <span className="text-muted-foreground"> ({tally.likelyLoss} likely)</span>}</>
+                )}
+                {(medianTally.won + medianTally.lost + medianTally.likelyWin + medianTally.likelyLoss) > 0 && (
+                  <> · median <span className="text-emerald-400">{medianTally.won + medianTally.likelyWin}</span>–<span className="text-red-400">{medianTally.lost + medianTally.likelyLoss}</span>{(medianTally.likelyWin + medianTally.likelyLoss) > 0 && <span className="text-muted-foreground"> ({medianTally.likelyWin + medianTally.likelyLoss} likely)</span>}</>
                 )}
                 {' · '}updated {new Date(data.updated).toLocaleTimeString()}
               </>

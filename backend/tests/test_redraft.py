@@ -302,3 +302,16 @@ def test_feed_attributes_bursts_from_stat_diff():
     # First sighting of a player's stat line: no fabricated whole-game "diff".
     feed2, _, _, _ = build_feed(res, status, extras, prev, [], 1000.0, {}, live_stats)
     assert [f for f in feed2 if f["kind"] == "score"][0]["why"] == ""
+
+
+def test_median_block_and_verdict():
+    from app.live import median_block
+    mk = lambda n, pts, rem, left: {"name": n, "points": pts, "proj_remaining": rem, "in_play": left, "yet_to_play": 0}
+    sides = [mk("a", 100, 0, 0), mk("b", 120, 0, 0), mk("me", 130, 0, 0), mk("d", 140, 0, 0)]
+    m = median_block(sides, sides[2])
+    assert m["now"] == 125 and m["verdict"] == "won" and m["margin_now"] == 5.0
+    sides2 = [mk("a", 100, 0, 0), mk("b", 118, 20, 1), mk("me", 130, 0, 0), mk("d", 140, 0, 0)]
+    m2 = median_block(sides2, sides2[2])
+    assert m2["teams_left"] == 1 and m2["verdict"] == "close"
+    sides3 = [mk("a", 100, 0, 0), mk("b", 105, 4, 1), mk("me", 160, 0, 0), mk("d", 110, 0, 0)]
+    assert median_block(sides3, sides3[2])["verdict"] == "likely win"

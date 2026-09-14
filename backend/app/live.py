@@ -288,8 +288,11 @@ def live_sleeper(league_id: str, week: int, user_id: str, season: int = 2026) ->
                 a, b = pair
                 board.append({"a": {"name": team_name(a["roster_id"])[0], "points": float(a.get("points") or 0)},
                               "b": {"name": team_name(b["roster_id"])[0], "points": float(b.get("points") or 0)}})
+        all_sides = [_side(*team_name(m["roster_id"]), starters_of(m), m.get("points")) for m in matchups]
         return {"platform": "sleeper", "league_id": league_id, "league": league.get("name"),
-                "week": week, "me": me_side, "opp": opp_side, "scoreboard": board}
+                "week": week, "me": me_side, "opp": opp_side, "scoreboard": board,
+                "median_auto": int((league.get("settings") or {}).get("league_average_match") or 0) == 1,
+                "_all_sides": all_sides}
     finally:
         conn.close()
 
@@ -347,8 +350,15 @@ def live_espn(league_id: str, week: int, team_id: int, season: int = 2026, name:
         board = [{"a": {"name": names.get((m.get("home") or {}).get("teamId"), "?"), "points": total(m.get("home") or {})},
                   "b": {"name": names.get((m.get("away") or {}).get("teamId"), "?"), "points": total(m.get("away") or {})}}
                  for m in sched if m.get("home") and m.get("away")]
+        all_sides = []
+        for m in sched:
+            for side_key in ("home", "away"):
+                raw = m.get(side_key)
+                if raw:
+                    all_sides.append(_side(names.get(raw.get("teamId"), ""), "", starters_of(raw), total(raw)))
         return {"platform": "espn", "league_id": league_id, "league": name or (data.get("settings") or {}).get("name") or "ESPN League",
-                "week": week, "me": me_side, "opp": opp_side, "scoreboard": board}
+                "week": week, "me": me_side, "opp": opp_side, "scoreboard": board,
+                "median_auto": False, "_all_sides": all_sides}
     finally:
         conn.close()
 
@@ -413,6 +423,43 @@ EVENT_MIN_DELTA = 2.0      # points jump between polls that counts as "something
 def _load_events(conn, uid: str) -> tuple[dict, list, dict]:
     state = _cache_get(conn, f"live://state/{uid}", EVENT_TTL) or {}
     return state.get("snap") or {}, state.get("events") or [], state.get("stats") or {}
+
+
+def median_pref_key(uid: str) -> str:
+    return f"pref://median/{uid}"
+
+
+def median_verdict(mine_now: float, mine_proj: float, med_now: float, med_proj: float,
+                   any_left: bool, avg_remaining: float) -> str:
+    """won/lost once nobody has players left; else likely/close against the
+    projected median, with a cushion that scales with what's still to play."""
+    if not any_left:
+        return "won" if mine_now > med_now else "lost" if mine_now < med_now else "tied"
+    margin = mine_proj - med_proj
+    cushion = 5.0 + 0.25 * avg_remaining
+    if abs(margin) > cushion:
+        return "likely win" if margin > 0 else "likely loss"
+    return "close"
+
+
+def median_block(sides: list[dict], mine: dict | None) -> dict | None:
+    """sides: every team's {name, points, proj_remaining, in_play, yet_to_play}."""
+    import statistics
+    if not sides or not mine:
+        return None
+    now = [float(x["points"]) for x in sides]
+    proj = [float(x["points"]) + float(x.get("proj_remaining") or 0) for x in sides]
+    left = [int(x.get("in_play") or 0) + int(x.get("yet_to_play") or 0) for x in sides]
+    med_now, med_proj = statistics.median(now), statistics.median(proj)
+    mine_now = float(mine["points"]); mine_proj = mine_now + float(mine.get("proj_remaining") or 0)
+    avg_rem = sum(float(x.get("proj_remaining") or 0) for x in sides) / len(sides)
+    return {
+        "now": round(med_now, 2), "proj": round(med_proj, 1),
+        "mine_now": round(mine_now, 2), "mine_proj": round(mine_proj, 1),
+        "margin_now": round(mine_now - med_now, 1), "margin_proj": round(mine_proj - med_proj, 1),
+        "teams_left": sum(1 for n in left if n > 0), "teams": len(sides),
+        "verdict": median_verdict(mine_now, mine_proj, med_now, med_proj, any(n > 0 for n in left), avg_rem),
+    }
 
 
 def build_feed(results: list[dict], status: dict, extras: dict, prev: dict, events: list, now: float,
@@ -523,6 +570,11 @@ def build_live(uid: str, leagues: list[dict], season: int = 2026) -> dict:
         results = [r for r in ex.map(one, leagues) if r and (r.get("me") or r.get("error"))]
     conn = get_connection()
     try:
+        prefs = set(_cache_get(conn, median_pref_key(uid), 10**9) or [])
+        for r in results:
+            key = f"{r['platform']}:{r['league_id']}"
+            r["median_on"] = key in prefs or bool(r.get("median_auto"))
+            r["median"] = median_block(r.pop("_all_sides", []), r.get("me")) if r["median_on"] else None
         status = fetch_game_status(conn)
         extras = aggregate(results, status)
         prev, events, prev_stats = _load_events(conn, uid)
