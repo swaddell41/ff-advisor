@@ -398,6 +398,13 @@ def evaluate_sleeper(league_id: str, season: int, method: str = "auction") -> di
         conn.close()
 
 
+def _slot_id(entry: dict) -> int:
+    """ESPN roster entry -> lineupSlotId. QB is slot 0, so never use `or`
+    to default it (that silently benches every quarterback)."""
+    sid = entry.get("lineupSlotId")
+    return 20 if sid is None else int(sid)
+
+
 # ESPN lineup slot ids -> our slot tokens (bench/IR and IDP slots excluded).
 ESPN_SLOT = {
     0: "QB", 2: "RB", 4: "WR", 6: "TE", 17: "K", 16: "DEF",

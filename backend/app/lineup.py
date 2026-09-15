@@ -31,6 +31,7 @@ from app.db import get_connection
 from app.redraft import (
     ESPN_POS,
     ESPN_SLOT,
+    _slot_id,
     _dst_espn_id_by_abbrev,
     _espn_to_sleeper,
     _sleeper_to_espn,
@@ -314,7 +315,7 @@ def lineup_espn(league_id: str, season: int, team_id: int) -> dict:
                 **(vegas.get(tm) or {}),
             }
             players.append(row)
-            if int(entry.get("lineupSlotId") or 20) in ESPN_SLOT:
+            if _slot_id(entry) in ESPN_SLOT:
                 current_names.add(row["name"])
         tname = team.get("name") or f"Team {team_id}"
         out = _build_result(tname, week, players, current_names, slots)

@@ -315,3 +315,10 @@ def test_median_block_and_verdict():
     assert m2["teams_left"] == 1 and m2["verdict"] == "close"
     sides3 = [mk("a", 100, 0, 0), mk("b", 105, 4, 1), mk("me", 160, 0, 0), mk("d", 110, 0, 0)]
     assert median_block(sides3, sides3[2])["verdict"] == "likely win"
+
+
+def test_espn_qb_slot_zero_is_a_starter():
+    from app.redraft import ESPN_SLOT, _slot_id
+    assert _slot_id({"lineupSlotId": 0}) == 0 and ESPN_SLOT[0] == "QB"   # the regression: 0 is falsy
+    assert _slot_id({"lineupSlotId": None}) == 20 and 20 not in ESPN_SLOT
+    assert _slot_id({}) == 20

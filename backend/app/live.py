@@ -28,6 +28,7 @@ from app.redraft import (
 
     ESPN_POS,
     ESPN_SLOT,
+    _slot_id,
     PRO_TEAM,
     _cache_get,
     _cache_set,
@@ -319,7 +320,7 @@ def live_espn(league_id: str, week: int, team_id: int, season: int = 2026, name:
         def starters_of(s: dict) -> list[dict]:
             rows = []
             for e in ((s.get("rosterForCurrentScoringPeriod") or {}).get("entries")) or []:
-                slot = ESPN_SLOT.get(int(e.get("lineupSlotId") or 20))
+                slot = ESPN_SLOT.get(_slot_id(e))
                 if not slot:
                     continue
                 ppe = e.get("playerPoolEntry") or {}
