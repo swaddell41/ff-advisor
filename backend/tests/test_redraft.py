@@ -322,3 +322,66 @@ def test_espn_qb_slot_zero_is_a_starter():
     assert _slot_id({"lineupSlotId": 0}) == 0 and ESPN_SLOT[0] == "QB"   # the regression: 0 is falsy
     assert _slot_id({"lineupSlotId": None}) == 20 and 20 not in ESPN_SLOT
     assert _slot_id({}) == 20
+
+
+def _st(name, pos, slot, kick):
+    return {"name": name, "pos": pos, "slot": slot, "kickoff": kick, "aav": 10}
+
+
+def test_flex_late_puts_latest_kickoff_in_the_flex():
+    from app.lineup import flex_late
+    now = "2026-09-20T12:00Z"
+    rows = flex_late([
+        _st("EarlyWR", "WR", "FLEX", "2026-09-20T17:00Z"),
+        _st("MondayWR", "WR", "WR", "2026-09-22T00:15Z"),
+        _st("SundayRB", "RB", "RB", "2026-09-20T20:25Z"),
+    ], now)
+    slot = {r["name"]: r["slot"] for r in rows}
+    assert slot == {"EarlyWR": "WR", "MondayWR": "FLEX", "SundayRB": "RB"}
+
+
+def test_flex_late_prefers_broadest_seat_and_respects_eligibility():
+    from app.lineup import flex_late
+    now = "2026-09-20T12:00Z"
+    rows = flex_late([
+        _st("LateQB", "QB", "QB", "2026-09-22T00:15Z"),
+        _st("EarlyQB", "QB", "SUPER_FLEX", "2026-09-20T17:00Z"),
+        _st("LateTE", "TE", "TE", "2026-09-22T00:15Z"),
+        _st("EarlyRB", "RB", "WRRB_FLEX", "2026-09-20T17:00Z"),   # a TE can't sit in WR/RB flex
+    ], now)
+    slot = {r["name"]: r["slot"] for r in rows}
+    assert slot["LateQB"] == "SUPER_FLEX" and slot["EarlyQB"] == "QB"
+    assert slot["LateTE"] == "TE" and slot["EarlyRB"] == "WRRB_FLEX"
+
+
+def test_flex_late_never_moves_locked_or_unknown_players():
+    from app.lineup import flex_late, flex_tips
+    now = "2026-09-20T18:00Z"   # the 1pm flex has already kicked off
+    cur = [
+        _st("LockedWR", "WR", "FLEX", "2026-09-20T17:00Z"),
+        _st("MondayWR", "WR", "WR", "2026-09-22T00:15Z"),
+        _st("ByeRB", "RB", "RB", None),
+    ]
+    assert [r["slot"] for r in flex_late(cur, now)] == ["FLEX", "WR", "RB"]
+    assert flex_tips(cur, now) == []
+
+
+def test_flex_tips_describe_the_swap():
+    from app.lineup import flex_tips
+    tips = flex_tips([
+        _st("EarlyWR", "WR", "FLEX", "2026-09-20T17:00Z"),
+        _st("MondayWR", "WR", "WR", "2026-09-22T00:15Z"),
+    ], "2026-09-20T12:00Z")
+    assert len(tips) == 1
+    assert (tips[0]["slot"], tips[0]["move_in"], tips[0]["move_out"], tips[0]["from_slot"]) == ("FLEX", "MondayWR", "EarlyWR", "WR")
+
+
+def test_flex_tips_pair_each_partner_once_with_two_flex_seats():
+    from app.lineup import flex_tips
+    tips = flex_tips([
+        _st("EarlyTE", "TE", "FLEX", "2026-09-20T17:00Z"),
+        _st("EarlyRB", "RB", "FLEX", "2026-09-20T17:00Z"),
+        _st("LateRB", "RB", "RB", "2026-09-22T00:15Z"),
+        _st("LateTE", "TE", "TE", "2026-09-21T00:20Z"),
+    ], "2026-09-20T12:00Z")
+    assert sorted((t["move_in"], t["move_out"]) for t in tips) == [("LateRB", "EarlyRB"), ("LateTE", "EarlyTE")]

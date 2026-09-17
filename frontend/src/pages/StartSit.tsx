@@ -21,7 +21,12 @@ interface LineupResponse {
   current_total: number; optimal_total: number; delta: number
   start: Row[]; sit: Row[]; optimal: Row[]; bench: Row[]
   flags: { name: string; why: string }[]
+  flex_tips?: { slot: string; move_in: string; move_in_pos: string; move_in_kickoff: string | null; from_slot: string; move_out: string | null; move_out_kickoff: string | null }[]
 }
+
+const slotName = (s: string) => ({ SUPER_FLEX: 'Superflex', WRRB_FLEX: 'W/R flex', REC_FLEX: 'W/T flex', FLEX: 'Flex' }[s] ?? s)
+const kick = (iso?: string | null) =>
+  iso ? new Date(iso).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : ''
 
 export default function StartSit() {
   const { platform, setPlatform, leagueId, setLeagueId, setTeamId, teamId, teams, data, error, busy, run, pickSavedLeague, pickTeam, leagues, remove } =
@@ -43,7 +48,7 @@ export default function StartSit() {
   const context = (r: Row) => {
     const bits: React.ReactNode[] = []
     if (r.team && r.opp) {
-      bits.push(<span key="m">{r.team} vs {r.opp}</span>)
+      bits.push(<span key="m">{r.team} vs {r.opp}{r.kickoff ? ` · ${kick(r.kickoff)}` : ''}</span>)
       if (r.implied != null) {
         bits.push(
           <span key="v" className={cn(r.implied >= 26 ? 'text-emerald-400' : r.implied <= 19 ? 'text-red-400/80' : '')}>
@@ -195,6 +200,24 @@ export default function StartSit() {
             </div>
           )}
 
+          {(data.flex_tips?.length ?? 0) > 0 && (
+            <div className="rounded-lg border border-sky-500/40 bg-sky-500/5 p-3 space-y-1.5">
+              <div className="text-[11px] uppercase tracking-wider text-sky-400">Flex seat · same points, more outs</div>
+              {data.flex_tips!.map((t) => (
+                <div key={t.slot + t.move_in} className="text-sm">
+                  Put <span className="font-medium">{t.move_in}</span>
+                  <span className="text-xs text-muted-foreground"> ({kick(t.move_in_kickoff)})</span> in your {slotName(t.slot)}
+                  {t.move_out && <> and slide <span className="font-medium">{t.move_out}</span>
+                    <span className="text-xs text-muted-foreground"> ({kick(t.move_out_kickoff)})</span> to {slotName(t.from_slot)}</>}.
+                </div>
+              ))}
+              <div className="text-xs text-muted-foreground">
+                Your latest kickoff belongs in your broadest seat: if he's a surprise scratch, any eligible
+                position off your bench can replace him instead of only a {data.flex_tips![0].move_in_pos}.
+              </div>
+            </div>
+          )}
+
           {data.flags.length > 0 && (
             <div className="text-sm text-amber-400">
               ⚠ {data.flags.map((f) => `${f.name} (${(f.why || 'no projection').replace('_', ' ').toLowerCase()})`).join(' · ')}
@@ -226,7 +249,8 @@ export default function StartSit() {
               trust it less). Vegas implied totals give the scoring environment
               (<span className="text-emerald-400">26+</span> elite, <span className="text-red-400/80">≤19</span> ugly) —
               the strongest single context signal. "% started" is what managers across ESPN are doing.
-              On close calls: favored in your matchup → take the safer floor; trailing or underdog →
+              Among the chosen starters, the latest kickoffs are seated in the flex spots so a
+              late scratch can be covered by any position. On close calls: favored in your matchup → take the safer floor; trailing or underdog →
               take the upside.
             </div>
           </div>

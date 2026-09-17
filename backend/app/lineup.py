@@ -31,6 +31,7 @@ from app.db import get_connection
 from app.redraft import (
     ESPN_POS,
     ESPN_SLOT,
+    SLOT_ELIGIBILITY,
     _slot_id,
     _dst_espn_id_by_abbrev,
     _espn_to_sleeper,
@@ -170,8 +171,83 @@ def _wk_proj(v: dict | None, week: int) -> float:
 SLOT_ORDER = ["QB", "RB", "WR", "TE", "WRRB_FLEX", "REC_FLEX", "FLEX", "SUPER_FLEX", "K", "DEF"]
 
 
-def _build_result(name: str, week: int, players: list[dict], current_names: set[str], slots: list[str]) -> dict:
+def _now_key() -> str:
+    """Now, in the same shape as ESPN's kickoff stamps ('2026-09-20T17:00Z'),
+    so the two compare as plain strings."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+
+
+def flex_late(starters: list[dict], now: str | None = None) -> list[dict]:
+    """
+    Same starters, better seats: the latest kickoffs go in the broadest slots.
+
+    A late scratch is only survivable if the seat it empties accepts more than
+    one position, so whenever two starters could legally trade seats and the
+    one in the narrower seat kicks off later, they trade. Points are untouched.
+    Players whose game has started (or has no kickoff: bye, unknown) stay put -
+    the platforms lock them, so advice to move them is advice you can't take.
+    """
+    now = now or _now_key()
+    rows = [dict(p) for p in starters]
+
+    def breadth(p: dict) -> int:
+        return len(SLOT_ELIGIBILITY.get(p.get("slot") or "", ()))
+
+    def movable(p: dict) -> bool:
+        return bool(p.get("kickoff")) and p["kickoff"] > now
+
+    for _ in range(len(rows) * len(rows) + 1):   # each swap is strict progress; this is just a fuse
+        swapped = False
+        for a in rows:
+            for b in rows:
+                if (
+                    breadth(a) < breadth(b)
+                    and movable(a) and movable(b)
+                    and a["kickoff"] > b["kickoff"]
+                    and a["pos"] in SLOT_ELIGIBILITY.get(b["slot"], ())
+                    and b["pos"] in SLOT_ELIGIBILITY.get(a["slot"], ())
+                ):
+                    a["slot"], b["slot"] = b["slot"], a["slot"]
+                    swapped = True
+        if not swapped:
+            break
+    return rows
+
+
+def flex_tips(current: list[dict], now: str | None = None) -> list[dict]:
+    """Seat swaps worth making in the lineup as it is SET right now: every
+    seat whose occupant changes when flex_late is applied, reported from the
+    broader seat's point of view."""
+    seated = [p for p in current if p.get("slot") in SLOT_ELIGIBILITY]
+    after = {p["name"]: p["slot"] for p in flex_late(seated, now)}
+    tips, used = [], set()
+    for p in seated:
+        new = after[p["name"]]
+        if new == p["slot"] or len(SLOT_ELIGIBILITY[new]) <= len(SLOT_ELIGIBILITY[p["slot"]]):
+            continue   # only narrate the player moving INTO the broader seat
+        # His partner vacated a seat of that kind - ideally straight into the
+        # seat he left. Leagues with several FLEX seats need each partner once.
+        leaving = [q for q in seated if q["slot"] == new and after[q["name"]] != new and q["name"] not in used]
+        out = next((q for q in leaving if after[q["name"]] == p["slot"]), leaving[0] if leaving else None)
+        if out:
+            used.add(out["name"])
+        tips.append({
+            "slot": new,
+            "move_in": p["name"], "move_in_pos": p["pos"], "move_in_kickoff": p.get("kickoff"),
+            "from_slot": p["slot"],
+            "move_out": out["name"] if out else None,
+            "move_out_kickoff": out.get("kickoff") if out else None,
+        })
+    return tips
+
+
+def _build_result(
+    name: str, week: int, players: list[dict], current_names: set[str], slots: list[str],
+    current_slots: dict[str, str] | None = None,
+) -> dict:
     optimal, bench = optimal_lineup(players, slots)
+    optimal = flex_late(optimal)
     optimal.sort(key=lambda p: (
         SLOT_ORDER.index(p["slot"]) if p["slot"] in SLOT_ORDER else len(SLOT_ORDER),
         -(p["aav"] or 0),
@@ -196,6 +272,9 @@ def _build_result(name: str, week: int, players: list[dict], current_names: set[
         ),
         "optimal": optimal,
         "bench": bench,
+        "flex_tips": flex_tips(
+            [{**p, "slot": (current_slots or {}).get(p["name"])} for p in current]
+        ),
         "flags": [
             {"name": p["name"], "why": (p.get("injury") or ("no projection" if not p["aav"] else ""))}
             for p in current
@@ -264,9 +343,15 @@ def lineup_sleeper(league_id: str, season: int, user_id: str, roster_id: int | N
 
         players = [prow(sid) for sid in (mine.get("players") or [])]
         current_names = {prow(sid)["name"] for sid in starters}
+        # Sleeper's `starters` is index-aligned with the non-bench roster_positions.
+        current_slots = {
+            prow(str(sid))["name"]: slot
+            for slot, sid in zip(slots, mine.get("starters") or [])
+            if sid and str(sid) != "0"
+        }
         u = users.get(mine.get("owner_id") or "", {})
         tname = (u.get("metadata") or {}).get("team_name") or u.get("display_name") or "My team"
-        out = _build_result(tname, week, players, current_names, slots)
+        out = _build_result(tname, week, players, current_names, slots, current_slots)
         out["league"] = league.get("name")
         return out
     finally:
@@ -292,7 +377,7 @@ def lineup_espn(league_id: str, season: int, team_id: int) -> dict:
         sproj = fetch_sleeper_projections(conn, season, week)
         espn_to_sleeper = _espn_to_sleeper(conn)
 
-        players, current_names = [], set()
+        players, current_names, current_slots = [], set(), {}
         for entry in ((team.get("roster") or {}).get("entries")) or []:
             p = (entry.get("playerPoolEntry") or {}).get("player") or {}
             eid = str(p.get("id"))
@@ -317,8 +402,9 @@ def lineup_espn(league_id: str, season: int, team_id: int) -> dict:
             players.append(row)
             if _slot_id(entry) in ESPN_SLOT:
                 current_names.add(row["name"])
+                current_slots[row["name"]] = ESPN_SLOT[_slot_id(entry)]
         tname = team.get("name") or f"Team {team_id}"
-        out = _build_result(tname, week, players, current_names, slots)
+        out = _build_result(tname, week, players, current_names, slots, current_slots)
         out["league"] = settings.get("name") or "ESPN League"
         return out
     finally:

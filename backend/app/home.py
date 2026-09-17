@@ -79,6 +79,10 @@ def _lineup_summary(res: dict) -> dict:
         "start": [p["name"] for p in res.get("start", [])][:3],
         "sit": [p["name"] for p in res.get("sit", [])][:3],
         "flags": [f["name"] for f in res.get("flags", [])][:3],
+        "flex_tips": [
+            {"slot": t["slot"], "move_in": t["move_in"], "move_out": t["move_out"]}
+            for t in res.get("flex_tips", [])
+        ][:2],
     }
 
 

@@ -19,7 +19,7 @@ interface Card {
   teams?: number
   url?: string
   record?: { wins: number; losses: number; pts: number; rank: number | null }
-  lineup?: { delta: number; current: number; optimal: number; start: string[]; sit: string[]; flags: string[] }
+  lineup?: { delta: number; current: number; optimal: number; start: string[]; sit: string[]; flags: string[]; flex_tips?: { slot: string; move_in: string; move_out: string | null }[] }
   waivers?: { faab: { enabled: boolean; remaining: number; budget: number } | null; top: { name: string; pos: string; tier: string; bid: number | null; delta_wk: number }[] }
   posture?: { value: string; is_override: boolean }
   trade?: { action: 'buy' | 'sell' | 'hold' | 'reassess'; text: string; needs: string[]; surplus: string[] }
@@ -122,6 +122,12 @@ export default function Home() {
                     {c.lineup.delta > 0.5 && (
                       <div className="text-xs text-muted-foreground mt-0.5">
                         start {c.lineup.start.join(', ')}{c.lineup.sit.length ? ` · sit ${c.lineup.sit.join(', ')}` : ''}
+                      </div>
+                    )}
+                    {(c.lineup.flex_tips?.length ?? 0) > 0 && (
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        <span className="text-sky-400">flex seat</span>{' '}
+                        {c.lineup.flex_tips!.map((t) => `${t.move_in} into ${t.slot.replace('_', ' ')}`).join(' · ')} — plays later
                       </div>
                     )}
                   </div>
